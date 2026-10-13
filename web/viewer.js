@@ -67,9 +67,12 @@ export class Viewer {
     this._bindEvents();
     new ResizeObserver(() => this._resize()).observe(container);
     this._resize();
+    this._buildGizmo();
     const loop = () => {
+      this._animateView();
       if (this.activeCamera === camera) controls.update();
       renderer.render(scene, this.activeCamera);
+      this._renderGizmo();
       requestAnimationFrame(loop);
     };
     loop();
@@ -119,10 +122,14 @@ export class Viewer {
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       down = null;
       if (moved > 4) return;
+      const g = this._gizmoHit(e);
+      if (g) { this.setViewDir(g); return; }
       this.onPick(this._hit(e), e);
     });
     el.addEventListener('pointermove', (e) => {
       if (e.buttons) return;
+      const g = this._gizmoHover(e);
+      if (g) { this._setHover(null); return; }
       const hit = this._hit(e);
       this._setHover(hit);
       this.onHover(hit);
@@ -494,6 +501,113 @@ export class Viewer {
     if (Math.abs(niceStep(size / 10) - this.gridStep) > 1e-9) this._buildGrid(size);
   }
 
+  // --------------------------------------------------------- axis gizmo
+
+  /** XYZ axis triad in the lower-left corner that turns with the view; click an axis to look along it. */
+  _buildGizmo() {
+    const scene = new THREE.Scene();
+    const cam = new THREE.OrthographicCamera(-1.7, 1.7, 1.7, -1.7, 0.1, 10);
+    const up = new THREE.Vector3(0, 1, 0);
+    this.gizmo = { scene, cam, size: 112, margin: 10, targets: [], hover: null };
+    const axes = [['X', [1, 0, 0], '#d23c3c'], ['Y', [0, 1, 0], '#2f9e44'], ['Z', [0, 0, 1], '#3367d6']];
+    for (const [name, d, color] of axes) {
+      const dir = new THREE.Vector3(...d);
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.85, 12), new THREE.MeshBasicMaterial({ color }));
+      shaft.position.copy(dir).multiplyScalar(0.425);
+      shaft.quaternion.setFromUnitVectors(up, dir);
+      scene.add(shaft);
+      const pos = labelSprite(name, color, true);
+      pos.position.copy(dir).multiplyScalar(1.12);
+      pos.scale.set(0.56, 0.56, 1);
+      pos.userData = { dir: d, base: 0.56, label: `${name} 方向から見る` };
+      scene.add(pos);
+      const neg = labelSprite('', color, false);
+      neg.position.copy(dir).multiplyScalar(-0.9);
+      neg.scale.set(0.34, 0.34, 1);
+      neg.userData = { dir: d.map((c) => -c), base: 0.34, label: `-${name} 方向から見る` };
+      scene.add(neg);
+      this.gizmo.targets.push(pos, neg);
+    }
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.09, 16, 12), new THREE.MeshBasicMaterial({ color: 0x8a96a3 }));
+    scene.add(ball);
+  }
+
+  _gizmoRect() {
+    const { size, margin } = this.gizmo;
+    const h = this.container.clientHeight || 1;
+    return { x: margin, y: h - margin - size, size };
+  }
+
+  _renderGizmo() {
+    const r = this.renderer;
+    const { scene, cam, size, margin } = this.gizmo;
+    const q = this.activeCamera.quaternion;
+    cam.position.set(0, 0, 4).applyQuaternion(q);
+    cam.quaternion.copy(q);
+    // labels ignore depth so they stay readable; draw the ones nearer the viewer last
+    const toViewer = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+    for (const t of this.gizmo.targets) t.renderOrder = 100 + Math.round(t.position.dot(toViewer) * 100);
+    r.autoClear = false;
+    r.setScissorTest(true);
+    r.setScissor(margin, margin, size, size);
+    r.setViewport(margin, margin, size, size);
+    r.clearDepth();
+    r.render(scene, cam);
+    r.setScissorTest(false);
+    r.setViewport(0, 0, this.container.clientWidth || 1, this.container.clientHeight || 1);
+    r.autoClear = true;
+  }
+
+  _gizmoPick(e) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const g = this._gizmoRect();
+    const x = e.clientX - rect.left - g.x;
+    const y = e.clientY - rect.top - g.y;
+    if (x < 0 || y < 0 || x > g.size || y > g.size) return null;
+    const ndc = new THREE.Vector2((x / g.size) * 2 - 1, -(y / g.size) * 2 + 1);
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(ndc, this.gizmo.cam);
+    const hit = rc.intersectObjects(this.gizmo.targets, false)[0];
+    return hit ? hit.object : 'inside';
+  }
+
+  _gizmoHit(e) {
+    const o = this._gizmoPick(e);
+    return o && o !== 'inside' ? o.userData.dir : null;
+  }
+
+  _gizmoHover(e) {
+    const o = this._gizmoPick(e);
+    const prev = this.gizmo.hover;
+    if (prev && prev !== o) prev.scale.setScalar(prev.userData.base);
+    this.gizmo.hover = o && o !== 'inside' ? o : null;
+    if (this.gizmo.hover) this.gizmo.hover.scale.setScalar(this.gizmo.hover.userData.base * 1.25);
+    this.renderer.domElement.style.cursor = this.gizmo.hover ? 'pointer' : (this.pickMode ? 'pointer' : '');
+    this.renderer.domElement.title = this.gizmo.hover ? this.gizmo.hover.userData.label : '';
+    return !!o;
+  }
+
+  /** Look at the target from direction d (animated), keeping the distance. */
+  setViewDir(d) {
+    if (this.activeCamera !== this.camera) return;
+    const dir = new THREE.Vector3(...d).normalize();
+    if (Math.abs(dir.z) > 0.999) dir.set(0, dir.z > 0 ? -1e-4 : 1e-4, dir.z).normalize(); // keep Z up
+    const off = this.camera.position.clone().sub(this.controls.target);
+    this._viewAnim = { from: off.clone().normalize(), to: dir, dist: off.length(), t0: performance.now() };
+  }
+
+  _animateView() {
+    const a = this._viewAnim;
+    if (!a) return;
+    const t = Math.min(1, (performance.now() - a.t0) / 280);
+    const k = t * t * (3 - 2 * t);
+    const v = a.from.clone().lerp(a.to, k);
+    if (v.lengthSq() < 1e-8) v.copy(a.to);
+    this.camera.position.copy(this.controls.target).addScaledVector(v.normalize(), a.dist);
+    this.camera.lookAt(this.controls.target);
+    if (t >= 1) this._viewAnim = null;
+  }
+
   setView(name) {
     const dirs = {
       iso: [1, -1, 0.8], top: [0, -0.0001, 1], front: [0, -1, 0], right: [1, 0, 0],
@@ -506,6 +620,32 @@ export class Viewer {
     this.camera.position.copy(this.controls.target).add(v);
     this.fit();
   }
+}
+
+function labelSprite(text, color, solid) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.beginPath();
+  g.arc(32, 32, 29, 0, Math.PI * 2);
+  if (solid) {
+    g.fillStyle = color;
+    g.fill();
+    g.fillStyle = '#fff';
+    g.font = 'bold 34px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(text, 32, 34);
+  } else {
+    g.fillStyle = color + '55';
+    g.fill();
+    g.lineWidth = 4;
+    g.strokeStyle = color;
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
 }
 
 function frameOf(plane) {
