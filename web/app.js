@@ -1,5 +1,6 @@
-import { Viewer } from './viewer.js';
-import { FEATURES, FeatureForm, profileOutline, refPoint, sketchToWorld } from './forms.js';
+import { Viewer, regionContains } from './viewer.js';
+import { FEATURES, FeatureForm, refPoint } from './forms.js';
+import { SketchEditor, CONSTRAINT_LABELS, fmtNum } from './sketch/editor.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -9,6 +10,8 @@ const state = {
   meshes: new Map(), // `${id}:${sig}` -> mesh
   selectedBody: null,
   form: null, // { type, featureId, form: FeatureForm, prevRollback, error }
+  sketch: null, // { editor: SketchEditor, featureId, prevRollback }
+  planePick: false,
   showEdges: true,
   xray: false,
 };
@@ -58,7 +61,17 @@ function onHover(hit) {
 }
 
 async function onPick(hit) {
+  if (state.planePick) {
+    if (hit && hit.kind === 'face') {
+      try {
+        const { plane } = await api('POST', '/api/pick/plane', { body: hit.body, point: hit.point });
+        startSketch(plane);
+      } catch (e) { toast(e.message, true); }
+    }
+    return;
+  }
   const f = state.form;
+  if (f && hit && hit.kind === 'profile') return pickProfile(f.form, hit);
   if (!f) {
     selectBody(hit && hit.body ? hit.body : null);
     return;
@@ -89,6 +102,23 @@ async function onPick(hit) {
   }
 }
 
+function pickProfile(form, hit) {
+  const field = form.pickField();
+  if (!('sketch' in form.params)) return;
+  if (form.params.sketch !== hit.sketch) {
+    form.params.sketch = hit.sketch;
+    form.params.profiles = [];
+  }
+  if (!hit.point || !field || field.t !== 'profiles') { form.render(); form.onChange(form.params); return; }
+  const sk = state.doc.sketches.find((s) => s.id === hit.sketch);
+  const smallest = (q) => sk.regions.filter((r) => regionContains(r, q)).sort((a, b) => a.area - b.area)[0];
+  const region = smallest(hit.point);
+  const refs = [...(form.params.profiles || [])];
+  const i = refs.findIndex((q) => smallest(q) === region);
+  if (i >= 0) refs.splice(i, 1); else refs.push(region ? region.point : hit.point);
+  form.set('profiles', refs, true);
+}
+
 async function faceIndices(body, refs) {
   const out = [];
   for (const r of refs) out.push((await api('POST', '/api/pick/face', { body, point: refPoint(r) })).face);
@@ -96,9 +126,21 @@ async function faceIndices(body, refs) {
 }
 
 function updatePickMode() {
+  if (state.sketch) return;
+  if (state.planePick) {
+    viewer.setPickMode('plane');
+    viewer.setProfileSelection(null);
+    $('#viewHint').textContent = 'スケッチを作成する平らな面をクリック、または右のパネルで平面を選択';
+    return;
+  }
   const f = state.form && state.form.form ? state.form : null;
   const field = f && f.form.pickField();
-  if (!field) {
+  const p = f ? f.form.params : null;
+  viewer.setProfileSelection(p && 'sketch' in p && p.sketch ? { sketch: p.sketch, points: p.profiles || [] } : null);
+  if (field && field.t === 'profiles') {
+    viewer.setPickMode('profile', null);
+    $('#viewHint').textContent = 'スケッチの領域をクリックして選択 / 解除';
+  } else if (!field) {
     viewer.setPickMode(f ? null : 'body');
     $('#viewHint').textContent = '';
   } else if (field.t === 'body') {
@@ -125,34 +167,29 @@ function updateOverlay() {
   const p = f.form.params;
   viewer.setSelectedBodies([p.target, p.tool].filter(Boolean));
   viewer.setSelection({ body: p.target, edgeRefs: (p.edges || []).map(refPoint), faceRefs: (p.faces || []).map(refPoint) });
-  viewer.setPreview(previewFor(f.type, p));
 }
 
-function previewFor(type, p) {
-  if (type === 'extrude' && p.profile) {
-    const loop = profileOutline(p.profile);
-    if (loop.length < 2) return [];
-    const off = +p.offset || 0;
-    const d = +p.distance || 0;
-    const [z0, z1] = p.symmetric ? [off - Math.abs(d) / 2, off + Math.abs(d) / 2] : [off, off + d];
-    const bottom = loop.map((q) => sketchToWorld(p.plane, q, z0));
-    const top = loop.map((q) => sketchToWorld(p.plane, q, z1));
-    const items = [{ points: bottom, closed: true }, { points: top, closed: true, dashed: true }];
-    const stride = Math.max(1, Math.floor(loop.length / 8));
-    for (let i = 0; i < loop.length; i += stride) items.push({ points: [bottom[i], top[i]], dashed: true });
-    return items;
+// live preview of the feature being edited
+let previewTimer = null;
+let previewSeq = 0;
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(runPreview, 250);
+}
+
+async function runPreview() {
+  const f = state.form;
+  if (!f || !f.form) return;
+  const seq = ++previewSeq;
+  try {
+    const pv = await api('POST', '/api/preview', { type: f.type, params: f.form.params, feature: f.featureId });
+    if (seq !== previewSeq || state.form !== f) return;
+    viewer.setPreviewBodies(pv.status.state === 'ok' ? pv : null);
+    f.err.hidden = pv.status.state === 'ok';
+    if (pv.status.state !== 'ok') f.err.textContent = `プレビュー: ${pv.status.message}`;
+  } catch (e) {
+    if (seq === previewSeq) { f.err.textContent = e.message; f.err.hidden = false; }
   }
-  if (type === 'revolve' && p.points && p.points.length) {
-    const prof = p.points.map(([r, z]) => [r, 0, z]);
-    const zs = p.points.map((q) => q[1]);
-    const axis = [[0, 0, Math.min(...zs) - 5], [0, 0, Math.max(...zs) + 5]];
-    const items = [{ points: prof, closed: true }, { points: axis, color: 0x3c6cd0, dashed: true }];
-    const ang = ((+p.angle || 0) * Math.PI) / 180;
-    const rot = p.points.map(([r, z]) => [r * Math.cos(ang), r * Math.sin(ang), z]);
-    items.push({ points: rot, closed: true, dashed: true });
-    return items;
-  }
-  return [];
 }
 
 // ---------------------------------------------------------------- render
@@ -164,9 +201,11 @@ async function setDoc(doc) {
   $('#btnRedo').disabled = !doc.can_redo;
   if (state.selectedBody && !doc.bodies.some((b) => b.id === state.selectedBody)) state.selectedBody = null;
   renderBodies();
+  renderSketches();
   renderFeatures();
+  viewer.setSketches(doc.sketches);
   await loadMeshes();
-  if (state.form) state.form.form.bodies = doc.bodies;
+  if (state.form && state.form.form) { state.form.form.bodies = doc.bodies; state.form.form.sketches = doc.sketches; }
   if (!state.form) renderPanel();
   updateOverlay();
 }
@@ -233,6 +272,42 @@ function renderBodies() {
   }
 }
 
+function renderSketches() {
+  const ul = $('#sketchList');
+  ul.innerHTML = '';
+  if (!state.doc.sketches.length) {
+    ul.innerHTML = '<li class="desc" style="cursor:default">スケッチはありません</li>';
+    return;
+  }
+  for (const sk of state.doc.sketches) {
+    const li = document.createElement('li');
+    const vis = document.createElement('button');
+    vis.className = 'vis' + (sk.visible ? '' : ' off');
+    vis.textContent = '👁';
+    vis.title = '表示/非表示';
+    vis.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await setDoc(await api('PUT', `/api/bodies/${sk.id}`, { visible: !sk.visible }));
+    });
+    const icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.textContent = '✎';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = sk.name;
+    const info = document.createElement('span');
+    info.className = 'desc';
+    info.textContent = sk.regions.length ? `${sk.regions.length} 領域` : '開いた形状';
+    li.append(vis, icon, name, info);
+    li.title = 'クリックで編集';
+    li.addEventListener('click', () => {
+      const f = state.doc.features.find((x) => x.id === sk.id);
+      if (f) openSketch(f);
+    });
+    ul.appendChild(li);
+  }
+}
+
 const STATE_ICON = { ok: '✓', error: '⚠', suppressed: '⊘', rolledback: '·' };
 
 function renderFeatures() {
@@ -241,9 +316,10 @@ function renderFeatures() {
   const { features, status, active } = state.doc;
   if (!features.length) {
     ul.innerHTML = `<li class="welcome" style="cursor:default"><div>
-      上のリボンからフィーチャーを追加して始めましょう。
-      <ol><li>ボックス / 押し出し で形状作成</li><li>フィレット でエッジを丸める</li><li>結合 でブーリアン演算</li></ol>
-      履歴をクリックするといつでもパラメータを編集できます。</div></li>`;
+      <b>はじめかた</b>
+      <ol><li>「新規スケッチ」で平面を選び、線・円などを描く</li><li>寸法と拘束で形を決めて「スケッチ終了」</li>
+      <li>「押し出し」「回転」で立体にする</li><li>フィレット・面取り・穴あけ (切り取り押し出し) で仕上げ</li></ol>
+      履歴をクリックすると、いつでもスケッチの寸法やフィーチャーのパラメータを変更できます。</div></li>`;
     return;
   }
   features.forEach((f, i) => {
@@ -273,7 +349,7 @@ function renderFeatures() {
       await setDoc(await api('DELETE', `/api/features/${f.id}`));
     });
     li.append(icon, name, roll, sup, del);
-    li.addEventListener('click', () => openForm(f.type, f));
+    li.addEventListener('click', () => (f.type === 'sketch' ? openSketch(f) : openForm(f.type, f)));
     li.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', f.id); });
     li.addEventListener('dragover', (e) => { e.preventDefault(); li.classList.add('dragover'); });
     li.addEventListener('dragleave', () => li.classList.remove('dragover'));
@@ -380,7 +456,13 @@ function escapeHtml(s) {
 // ------------------------------------------------------------ feature form
 
 async function openForm(type, feature = null, overrides = {}) {
+  if (state.sketch) return;
+  if (state.planePick) cancelPlanePick();
   if (state.form) await closeForm(false);
+  if (feature && ['extrude', 'revolve'].includes(type) && !feature.params.sketch && ('profile' in feature.params || 'points' in feature.params)) {
+    toast('旧形式 (v0.1) の押し出し/回転です。パラメータ編集には対応していません。削除・抑制は可能です。', true);
+    return;
+  }
   const schema = FEATURES[type];
   if (!schema) return;
   let prevRollback = state.doc.rollback;
@@ -396,6 +478,12 @@ async function openForm(type, feature = null, overrides = {}) {
     for (const fld of schema.fields) {
       if (fld.t === 'body' && fld.k === 'target' && !params.target && sel && type !== 'extrude' && type !== 'revolve') params.target = sel;
     }
+    if ('sketch' in params && !params.sketch && state.doc.sketches.length) {
+      const sks = state.doc.sketches;
+      params.sketch = ([...sks].reverse().find((s) => s.visible) || sks[sks.length - 1]).id;
+    }
+    // cutting / joining needs a body: default to the selected or the only one
+    if ('mode' in params && !params.target && state.doc.bodies.length) params.target = sel || state.doc.bodies[state.doc.bodies.length - 1].id;
   }
   const panel = $('#panel');
   panel.innerHTML = '';
@@ -441,14 +529,15 @@ async function openForm(type, feature = null, overrides = {}) {
 
   state.form = { type, featureId: feature ? feature.id : null, prevRollback, err, nameInput, form: null };
   state.form.form = new FeatureForm(body, {
-    type, params, bodies: state.doc.bodies, editing: !!feature,
-    onChange: () => { updatePickMode(); },
+    type, params, bodies: state.doc.bodies, sketches: state.doc.sketches, editing: !!feature,
+    onChange: () => { updatePickMode(); schedulePreview(); },
     onPickField: () => { updatePickMode(); },
   });
   cancel.addEventListener('click', () => closeForm(false));
   okBtn.addEventListener('click', () => commitForm());
   renderFeatures();
   updatePickMode();
+  schedulePreview();
 }
 
 async function commitForm() {
@@ -477,7 +566,10 @@ async function commitForm() {
       return;
     }
     state.form = null;
+    previewSeq++;
+    viewer.setPreviewBodies(null);
     await setDoc(doc);
+    updatePickMode();
     status(`${FEATURES[f.type].label} を${f.featureId ? '更新' : '追加'}しました`);
   } catch (e) {
     f.err.textContent = e.message;
@@ -489,6 +581,8 @@ async function closeForm(keep) {
   const f = state.form;
   if (!f) return;
   state.form = null;
+  previewSeq++;
+  viewer.setPreviewBodies(null);
   if (!keep && f.featureId) {
     await setDoc(await api('POST', '/api/rollback', { index: f.prevRollback }));
   } else {
@@ -545,6 +639,7 @@ const COMMANDS = {
   'export-usda': () => exportFile('usda'),
   'export-usda-mesh': () => exportFile('usda-mesh'),
   'export-stl': () => exportFile('stl'),
+  sketch: () => choosePlane(),
   undo: async () => { await closeForm(false); await setDoc(await api('POST', '/api/undo')); },
   redo: async () => { await closeForm(false); await setDoc(await api('POST', '/api/redo')); },
 };
@@ -597,6 +692,8 @@ $('#docName').addEventListener('change', async (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (state.sketch) return; // the sketch editor handles its own keys
+  if (e.key === 'Escape' && state.planePick) { cancelPlanePick(); return; }
   const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); run(e.shiftKey ? 'redo' : 'undo'); }
@@ -607,6 +704,195 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Enter' && state.form && !typing) { commitForm(); }
   else if (e.key.toLowerCase() === 'f' && !typing && !mod) { viewer.fit(); }
 });
+
+// ------------------------------------------------------------ sketching
+
+const STD_PLANES = {
+  XY: { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] },
+  XZ: { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 0, 1], n: [0, -1, 0] },
+  YZ: { origin: [0, 0, 0], x: [0, 1, 0], y: [0, 0, 1], n: [1, 0, 0] },
+};
+
+async function choosePlane() {
+  if (state.sketch) return;
+  await closeForm(false);
+  state.planePick = true;
+  const panel = $('#panel');
+  panel.innerHTML = `<h2>✎ 新規スケッチ</h2>
+    <p class="desc">スケッチを描く平面を選びます。ボディの平らな面をビューポートでクリックしても選べます。</p>
+    <div class="plane-buttons">
+      <button data-plane="XY"><b>XY</b><span>上面 (Z 方向)</span></button>
+      <button data-plane="XZ"><b>XZ</b><span>正面 (Y 方向)</span></button>
+      <button data-plane="YZ"><b>YZ</b><span>右側面 (X 方向)</span></button>
+    </div>
+    <div class="field"><label>平面のオフセット (法線方向)</label><input type="number" id="planeOffset" value="0" step="any"></div>
+    <div class="buttons"><button id="planeCancel">キャンセル</button></div>`;
+  panel.querySelectorAll('[data-plane]').forEach((b) => b.addEventListener('click', () => {
+    const pl = STD_PLANES[b.dataset.plane];
+    const off = +$('#planeOffset').value || 0;
+    startSketch({ origin: pl.n.map((c) => c * off), x: pl.x, y: pl.y });
+  }));
+  $('#planeCancel').addEventListener('click', cancelPlanePick);
+  updatePickMode();
+}
+
+function cancelPlanePick() {
+  state.planePick = false;
+  renderPanel();
+  updatePickMode();
+}
+
+function startSketch(plane) {
+  state.planePick = false;
+  const params = { ...structuredClone(state.defaults.sketch), plane };
+  const n = state.doc.features.filter((f) => f.type === 'sketch').length + 1;
+  enterSketch({ params, name: `Sketch${n}`, featureId: null, prevRollback: state.doc.rollback });
+}
+
+async function openSketch(feature) {
+  if (state.sketch) return;
+  await closeForm(false);
+  const prevRollback = state.doc.rollback;
+  const idx = state.doc.features.findIndex((f) => f.id === feature.id);
+  await setDoc(await api('POST', '/api/rollback', { index: idx }));
+  enterSketch({ params: feature.params, name: feature.name, featureId: feature.id, prevRollback });
+}
+
+function enterSketch({ params, name, featureId, prevRollback }) {
+  viewer.setPickMode(null);
+  viewer.setSelection();
+  viewer.setProfileSelection(null);
+  $('#viewHint').textContent = '';
+  document.body.classList.add('sketching');
+  const editor = new SketchEditor({
+    container: $('#viewport'),
+    viewer,
+    sketch: params,
+    name,
+    describe: (sk) => api('POST', '/api/sketch/describe', { sketch: sk }),
+    onChange: () => renderSketchPanel(),
+    onFinish: (sk) => finishSketch(sk),
+    onCancel: () => leaveSketch(true),
+  });
+  state.sketch = { editor, featureId, prevRollback, name };
+  viewer.setHiddenSketch(featureId);
+  renderSketchPanel();
+  updateSketchRibbon();
+}
+
+async function finishSketch(sk) {
+  const s = state.sketch;
+  if (!s) return;
+  try {
+    let doc;
+    if (s.featureId) {
+      await api('PUT', `/api/features/${s.featureId}`, { params: sk });
+      doc = await api('POST', '/api/rollback', { index: s.prevRollback });
+    } else {
+      doc = await api('POST', '/api/features', { type: 'sketch', params: sk, name: s.name });
+    }
+    await leaveSketch(false);
+    await setDoc(doc);
+    const bad = doc.features.filter((f) => doc.status[f.id] && doc.status[f.id].state === 'error').length;
+    status(s.featureId ? `${s.name} を更新しました${bad ? ` (エラーのフィーチャー ${bad} 件)` : ''}` : `${s.name} を作成しました。「押し出し」で立体にできます`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function leaveSketch(restore) {
+  const s = state.sketch;
+  if (!s) return;
+  s.editor.destroy();
+  state.sketch = null;
+  document.body.classList.remove('sketching');
+  viewer.exitSketchView();
+  viewer.setHiddenSketch(null);
+  if (restore && s.featureId) await setDoc(await api('POST', '/api/rollback', { index: s.prevRollback }));
+  renderPanel();
+  updatePickMode();
+}
+
+function updateSketchRibbon() {
+  const ed = state.sketch && state.sketch.editor;
+  document.querySelectorAll('#sketchRibbon [data-tool]').forEach((b) => b.classList.toggle('on', !!ed && ed.tool === b.dataset.tool));
+  const snap = $('#sketchRibbon [data-sk=snap]');
+  if (snap && ed) snap.classList.toggle('on', ed.snapGrid);
+}
+
+function renderSketchPanel() {
+  const s = state.sketch;
+  if (!s) return;
+  updateSketchRibbon();
+  const ed = s.editor;
+  const info = ed.info();
+  const hasGeom = ed.sk.entities.length > 0;
+  const badge = !info.ok ? '<span class="badge bad">拘束エラー</span>'
+    : !hasGeom ? '<span class="badge">空のスケッチ</span>'
+      : info.dof === 0 ? '<span class="badge ok">完全拘束</span>'
+        : `<span class="badge free">未拘束: 自由度 ${info.dof}</span>`;
+  const sel = info.selection;
+  const kinds = { point: '点', line: '線', circle: '円', arc: '弧', constraint: '拘束' };
+  const count = {};
+  for (const x of sel) count[x.kind] = (count[x.kind] || 0) + 1;
+  const selText = sel.length ? Object.entries(count).map(([k, n]) => `${kinds[k] || k}×${n}`).join('、') : 'なし';
+  const panel = $('#panel');
+  const focused = document.activeElement && panel.contains(document.activeElement) ? document.activeElement.dataset.dim : null;
+  panel.innerHTML = `<h2>✎ ${escapeHtml(s.name)}</h2>
+    <div class="sk-status">${badge}<span class="desc">閉じた領域: ${info.regions}</span></div>
+    <p class="desc tool-hint">${escapeHtml(info.hint || '')}</p>
+    <div class="field"><label>選択</label><div>${selText}</div></div>
+    <div class="field"><label>寸法 (値を変更すると形状が追従します)</label>
+      <table class="props dims">${info.dims.length ? info.dims.map((c, i) => `
+        <tr><td>${i + 1}. ${CONSTRAINT_LABELS[c.type]}</td>
+        <td><input data-dim="${c.id}" value="${fmtNum(c.value)}" inputmode="decimal"></td></tr>`).join('')
+    : '<tr><td colspan="2" class="desc">寸法ツール (D) で線や円をクリックして追加</td></tr>'}</table></div>
+    <details class="help"><summary>拘束の付け方</summary>
+      <p>図形を選択してから、上のリボンの拘束ボタンを押します。</p>
+      <ul><li>一致: 点＋点 / 点＋線・円</li><li>水平・垂直: 線、または 点＋点</li><li>平行・直交: 線＋線</li>
+      <li>等しい: 線どうし / 円・弧どうし</li><li>正接: 線＋円弧、円弧＋円弧</li><li>中点: 点＋線</li><li>同心: 円＋円</li>
+      <li>対称: 点＋点＋線</li><li>固定: 点・図形</li></ul>
+      <p>拘束アイコンや寸法をクリックして Delete で削除できます。寸法はダブルクリックで値を編集、ドラッグで位置を移動。</p>
+    </details>
+    <div class="buttons">
+      <button id="skCancel">キャンセル</button>
+      <button id="skFinish" class="primary">✓ スケッチ終了</button>
+    </div>`;
+  panel.querySelectorAll('input[data-dim]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+    inp.addEventListener('change', () => {
+      const v = evalNumber(inp.value);
+      if (v === null || !ed.setDimensionValue(inp.dataset.dim, v)) inp.value = fmtNum(ed.K(inp.dataset.dim)?.value);
+    });
+  });
+  if (focused) panel.querySelector(`input[data-dim="${focused}"]`)?.focus();
+  $('#skFinish').addEventListener('click', () => ed.finish());
+  $('#skCancel').addEventListener('click', () => {
+    if (ed.undoStack.length && !confirm('スケッチの変更を破棄しますか？')) return;
+    ed.cancel();
+  });
+}
+
+function evalNumber(s) {
+  const v = Number(String(s).trim());
+  return Number.isFinite(v) ? v : null;
+}
+
+document.querySelectorAll('#sketchRibbon [data-tool]').forEach((b) => b.addEventListener('click', () => state.sketch && state.sketch.editor.setTool(b.dataset.tool)));
+document.querySelectorAll('#sketchRibbon [data-constraint]').forEach((b) => b.addEventListener('click', () => state.sketch && state.sketch.editor.applyConstraint(b.dataset.constraint)));
+document.querySelectorAll('#sketchRibbon [data-sk]').forEach((b) => b.addEventListener('click', () => {
+  const ed = state.sketch && state.sketch.editor;
+  if (!ed) return;
+  const a = b.dataset.sk;
+  if (a === 'construction') ed.toggleConstruction();
+  else if (a === 'delete') ed.deleteSelection();
+  else if (a === 'undo') ed.undo();
+  else if (a === 'redo') ed.redo();
+  else if (a === 'fit') ed.fit();
+  else if (a === 'snap') { ed.snapGrid = !ed.snapGrid; updateSketchRibbon(); }
+  else if (a === 'finish') ed.finish();
+  else if (a === 'cancel') $('#skCancel')?.click();
+}));
 
 // ------------------------------------------------------------------ boot
 

@@ -430,3 +430,128 @@ def write_stl(breps: Sequence[sm.Brep], name: str = "claude-3dcad") -> str:
             lines.append("  endfacet")
     lines.append(f"endsolid {name}")
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Sketch-based features
+# ---------------------------------------------------------------------------
+
+
+def _loop_curves(sk, loop) -> list:
+    curves = []
+    for e, fwd in loop.edges:
+        t = e["type"]
+        if t == "line":
+            a, b = sk.p(e["p1"]), sk.p(e["p2"])
+            if not fwd:
+                a, b = b, a
+            curves.append(sm.create_line_segment((a[0], a[1], 0.0), (b[0], b[1], 0.0)))
+        elif t == "arc":
+            c = sk.p(e["c"])
+            a0, a1 = sk.arc_angles(e)
+            curves.append(sm.create_arc((c[0], c[1], 0.0), sk.radius(e), math.degrees(a0), math.degrees(a1)))
+        elif t == "circle":
+            c = sk.p(e["c"])
+            curves.append(sm.create_circle((c[0], c[1], 0.0), sk.radius(e)))
+    return curves
+
+
+def _to_plane(brep: sm.Brep, plane: dict) -> sm.Brep:
+    from .sketch import frame
+
+    o, x, y, _ = frame(plane)
+    if o == (0.0, 0.0, 0.0) and x == (1.0, 0.0, 0.0) and y == (0.0, 1.0, 0.0):
+        return brep
+    return sm.transform(brep, sm.Axis2Placement(o, x, y))
+
+
+def _region_solids(sk, regions, build_loop) -> sm.Brep:
+    """Union over regions of (outer loop solid minus hole solids)."""
+    result = None
+    for r in regions:
+        solid = build_loop(r.outer)
+        for h in r.holes:
+            solid = sm.boolean_difference(solid, build_loop(h))
+        result = solid if result is None else sm.boolean_union(result, solid)
+    if result is None:
+        raise KernelError("no closed profile selected")
+    return result
+
+
+def sketch_extrude(params: dict, profiles, z0: float, length: float) -> sm.Brep:
+    """Extrude selected sketch regions from local z0 over ``length`` along the sketch normal."""
+    from .sketch import Sketch, SketchError, find_regions, select_regions
+
+    if abs(length) < 1e-9:
+        raise KernelError("extrude distance must be non-zero")
+    sk = Sketch.from_params(params)
+    try:
+        regions = select_regions(find_regions(sk), profiles)
+    except SketchError as ex:
+        raise KernelError(str(ex)) from ex
+    if length < 0:
+        z0, length = z0 + length, -length
+
+    def build(loop):
+        body = sm.linear_sweep(_loop_curves(sk, loop), (0.0, 0.0, 1.0), length)
+        if z0:
+            sm.translate(body, (0.0, 0.0, z0))
+        return body
+
+    return _check_solid(_to_plane(_region_solids(sk, regions, build), sk.plane), "extrude")
+
+
+def sketch_revolve(params: dict, profiles, axis: str, angle_deg: float) -> sm.Brep:
+    from .sketch import Sketch, SketchError, find_regions, select_regions
+
+    sk = Sketch.from_params(params)
+    if axis in ("X", "Y"):
+        base, d = (0.0, 0.0), ((1.0, 0.0) if axis == "X" else (0.0, 1.0))
+    else:
+        line = next((e for e in sk.entities if e["id"] == axis and e["type"] == "line"), None)
+        if line is None:
+            raise KernelError("the revolve axis line no longer exists in the sketch")
+        base, b = sk.p(line["p1"]), sk.p(line["p2"])
+        d = (b[0] - base[0], b[1] - base[1])
+        if math.hypot(*d) < 1e-9:
+            raise KernelError("the revolve axis line has zero length")
+    try:
+        regions = select_regions(find_regions(sk), profiles)
+    except SketchError as ex:
+        raise KernelError(str(ex)) from ex
+    # a profile must not cross the axis
+    nx, ny = -d[1], d[0]
+    for r in regions:
+        sides = {math.copysign(1, (p[0] - base[0]) * nx + (p[1] - base[1]) * ny)
+                 for p in r.outer.poly if abs((p[0] - base[0]) * nx + (p[1] - base[1]) * ny) > 1e-7 * math.hypot(nx, ny)}
+        if len(sides) > 1:
+            raise KernelError("the profile crosses the revolve axis")
+
+    def build(loop):
+        return sm.rotational_sweep(_loop_curves(sk, loop), (base[0], base[1], 0.0), (d[0], d[1], 0.0), float(angle_deg))
+
+    return _check_solid(_to_plane(_region_solids(sk, regions, build), sk.plane), "revolve")
+
+
+def plane_from_face(brep: sm.Brep, point: Vec3) -> dict:
+    """Sketch plane on the planar face nearest ``point`` (normal pointing out of the body)."""
+    idx, _ = pick_face(brep, point)
+    face = brep.faces()[idx]
+    surf = face.surface()
+    if not surf.is_planar(1e-7):
+        raise KernelError("the selected face is not planar")
+    cp, uvs, _ = sm.surface_closest_point(surf, _v(point))
+    uv = uvs[0]
+    n = _v(face.outward_normal_at_uv(uv.x, uv.y))
+    p = (float(cp.x), float(cp.y), float(cp.z))
+    # origin: projection of the world origin onto the plane
+    k = sum(pc * nc for pc, nc in zip(p, n))
+    origin = tuple(k * c for c in n)
+    # sketch "up" (y) follows world +Z unless the face is horizontal, then world +Y
+    up = (0.0, 0.0, 1.0) if abs(n[2]) < 0.99 else (0.0, 1.0, 0.0)
+    du = sum(a * b for a, b in zip(up, n))
+    y = tuple(ui - du * ni for ui, ni in zip(up, n))
+    yl = math.sqrt(sum(v * v for v in y))
+    y = tuple(v / yl for v in y)
+    x = (y[1] * n[2] - y[2] * n[1], y[2] * n[0] - y[0] * n[2], y[0] * n[1] - y[1] * n[0])
+    return {"origin": list(origin), "x": list(x), "y": list(y)}

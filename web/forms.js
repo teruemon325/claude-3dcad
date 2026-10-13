@@ -1,8 +1,6 @@
 // Feature schemas and the property-panel form renderer.
-import { Sketcher } from './sketch.js';
 
 const MODE_OPTS = [['new', '新規ボディ'], ['join', '結合 (和)'], ['cut', '切り取り (差)'], ['intersect', '交差 (積)']];
-const PLANE_OPTS = [['XY', 'XY 平面 (上)'], ['XZ', 'XZ 平面 (正面)'], ['YZ', 'YZ 平面 (右)']];
 const needsTarget = (p) => p.mode && p.mode !== 'new';
 
 export const FEATURES = {
@@ -52,25 +50,31 @@ export const FEATURES = {
       { k: 'height', t: 'num', l: '高さ', min: 0 },
     ],
   },
+  sketch: {
+    label: 'スケッチ', icon: '✎', desc: 'スケッチは専用エディタで編集します。',
+    fields: [],
+  },
   extrude: {
-    label: '押し出し', icon: '⇧', desc: '平面上の閉じたプロファイルを法線方向に押し出します。',
+    label: '押し出し', icon: '⇧', desc: 'スケッチの閉じた領域 (プロファイル) を押し出します。ビューポートで領域をクリックして選択。',
     fields: [
+      { k: 'sketch', t: 'sketch', l: 'スケッチ' },
+      { k: 'profiles', t: 'profiles', l: 'プロファイル' },
+      { k: 'extent', t: 'select', l: '範囲', opts: [['distance', '距離'], ['symmetric', '対称 (両側)'], ['through', 'すべて貫通 (両側)']] },
+      { k: 'distance', t: 'num', l: '距離', show: (p) => p.extent !== 'through' },
+      { k: 'flip', t: 'bool', l: '方向を反転', show: (p) => !p.extent || p.extent === 'distance' },
       { k: 'mode', t: 'select', l: '操作', opts: MODE_OPTS },
       { k: 'target', t: 'body', l: '対象ボディ', show: needsTarget },
-      { k: 'plane', t: 'select', l: 'スケッチ平面', opts: PLANE_OPTS },
-      { k: 'offset', t: 'num', l: '平面オフセット' },
-      { k: 'profile', t: 'profile', l: 'プロファイル' },
-      { k: 'distance', t: 'num', l: '距離 (負で逆方向)' },
-      { k: 'symmetric', t: 'bool', l: '両側に対称' },
     ],
   },
   revolve: {
-    label: '回転', icon: '↻', desc: 'R-Z 平面の閉じたプロファイルを Z 軸まわりに回転します。',
+    label: '回転', icon: '↻', desc: 'スケッチの閉じた領域を軸まわりに回転します。',
     fields: [
+      { k: 'sketch', t: 'sketch', l: 'スケッチ' },
+      { k: 'profiles', t: 'profiles', l: 'プロファイル' },
+      { k: 'axis', t: 'axis', l: '回転軸' },
+      { k: 'angle', t: 'num', l: '角度 (度)' },
       { k: 'mode', t: 'select', l: '操作', opts: MODE_OPTS },
       { k: 'target', t: 'body', l: '対象ボディ', show: needsTarget },
-      { k: 'points', t: 'sketch', l: 'プロファイル (r, z)', mode: 'rz' },
-      { k: 'angle', t: 'num', l: '角度 (度)' },
     ],
   },
   fillet: {
@@ -157,26 +161,20 @@ export const FEATURES = {
   import_usd: { label: 'インポート', icon: '⇩', desc: 'USD ファイルから読み込んだ BRep。', fields: [{ k: 'filename', t: 'text', l: 'ファイル', readonly: true }] },
 };
 
-const PROFILE_TYPES = {
-  rectangle: { l: '長方形', fields: [['cx', '中心 X'], ['cy', '中心 Y'], ['width', '幅'], ['height', '高さ']], def: { cx: 0, cy: 0, width: 20, height: 10 } },
-  circle: { l: '円', fields: [['cx', '中心 X'], ['cy', '中心 Y'], ['radius', '半径']], def: { cx: 0, cy: 0, radius: 10 } },
-  polygon: { l: '正多角形', fields: [['cx', '中心 X'], ['cy', '中心 Y'], ['sides', '辺数'], ['radius', '外接円半径']], def: { cx: 0, cy: 0, sides: 6, radius: 10 } },
-  polyline: { l: '自由形状 (スケッチ)', fields: [], def: { points: [[0, 0], [20, 0], [20, 10], [10, 16], [0, 10]] } },
-};
-
 /** Renders a feature's parameters and manages viewport pick targets. */
 export class FeatureForm {
-  constructor(el, { type, params, bodies, editing, onChange, onPickField }) {
+  constructor(el, { type, params, bodies, sketches = [], editing, onChange, onPickField }) {
     this.el = el;
     this.type = type;
     this.schema = FEATURES[type];
     this.params = structuredClone(params);
     this.bodies = bodies;
+    this.sketches = sketches;
     this.editing = editing;
     this.onChange = onChange;
     this.onPickField = onPickField;
     this.active = null; // key of the active pick field
-    const pickables = this.schema.fields.filter((f) => ['edges', 'faces'].includes(f.t));
+    const pickables = this.schema.fields.filter((f) => ['edges', 'faces', 'profiles'].includes(f.t));
     if (pickables.length) this.active = pickables[0].k;
     else {
       const emptyBody = this.schema.fields.find((f) => f.t === 'body' && !this.params[f.k] && (!f.show || f.show(this.params)));
@@ -275,61 +273,51 @@ export class FeatureForm {
       });
       box.addEventListener('click', () => this.activate(f.k));
       wrap.appendChild(box);
-    } else if (f.t === 'profile') {
-      wrap.appendChild(this.renderProfile(v));
     } else if (f.t === 'sketch') {
-      const holder = document.createElement('div');
-      wrap.appendChild(holder);
-      requestAnimationFrame(() => {
-        this.sketcher = new Sketcher(holder, { points: v || [], mode: f.mode, onChange: (pts) => this.set(f.k, pts) });
+      const sel = document.createElement('select');
+      sel.add(new Option('— 選択 —', ''));
+      for (const sk of this.sketches) sel.add(new Option(sk.name, sk.id, false, sk.id === v));
+      if (v && !this.sketches.some((sk) => sk.id === v)) sel.add(new Option(`(存在しない: ${v})`, v, false, true));
+      sel.addEventListener('change', () => {
+        this.params.sketch = sel.value || null;
+        this.params.profiles = [];
+        if (this.params.axis && !['X', 'Y'].includes(this.params.axis)) this.params.axis = 'Y';
+        this.render();
+        this.onChange(this.params);
       });
+      wrap.appendChild(sel);
+    } else if (f.t === 'profiles') {
+      const box = document.createElement('div');
+      box.className = 'picklist' + (this.active === f.k ? ' active' : '');
+      const refs = v || [];
+      const hint = document.createElement('span');
+      hint.className = 'desc';
+      hint.textContent = refs.length ? '' : '自動 (外側の領域)。領域をクリックして指定';
+      box.appendChild(hint);
+      refs.forEach((r, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = `領域 ${i + 1}`;
+        const x = document.createElement('button');
+        x.type = 'button';
+        x.textContent = '×';
+        x.addEventListener('click', (e) => { e.stopPropagation(); this.removeRef(f.k, i); });
+        chip.appendChild(x);
+        box.appendChild(chip);
+      });
+      box.addEventListener('click', () => this.activate(f.k));
+      wrap.appendChild(box);
+    } else if (f.t === 'axis') {
+      const sel = document.createElement('select');
+      sel.add(new Option('スケッチの X 軸 (横)', 'X', false, v === 'X'));
+      sel.add(new Option('スケッチの Y 軸 (縦)', 'Y', false, v === 'Y'));
+      const sk = this.sketches.find((s2) => s2.id === this.params.sketch);
+      const lines = sk ? sk.curves.filter((c) => c.type === 'line') : [];
+      lines.forEach((l, i) => sel.add(new Option(`線 ${i + 1}${l.construction ? ' (構築線)' : ''}`, l.id, false, v === l.id)));
+      sel.addEventListener('change', () => this.set(f.k, sel.value));
+      wrap.appendChild(sel);
     }
     return wrap;
-  }
-
-  renderProfile(profile) {
-    const box = document.createElement('div');
-    box.className = 'sub-fields';
-    const sel = document.createElement('select');
-    for (const [k, def] of Object.entries(PROFILE_TYPES)) sel.add(new Option(def.l, k, false, k === profile.type));
-    sel.addEventListener('change', () => {
-      const prev = this.params.profile;
-      const next = { type: sel.value, ...structuredClone(PROFILE_TYPES[sel.value].def) };
-      for (const k of ['cx', 'cy']) if (k in prev && k in next) next[k] = prev[k];
-      this.set('profile', next, true);
-    });
-    box.appendChild(sel);
-    const def = PROFILE_TYPES[profile.type] || PROFILE_TYPES.rectangle;
-    if (profile.type === 'polyline') {
-      const holder = document.createElement('div');
-      box.appendChild(holder);
-      requestAnimationFrame(() => {
-        this.sketcher = new Sketcher(holder, {
-          points: profile.points || [], mode: 'xy',
-          onChange: (pts) => this.set('profile', { ...this.params.profile, points: pts }),
-        });
-      });
-    } else {
-      const grid = document.createElement('div');
-      grid.style.display = 'grid';
-      grid.style.gridTemplateColumns = '1fr 1fr';
-      grid.style.gap = '4px';
-      for (const [k, l] of def.fields) {
-        const f = document.createElement('div');
-        f.className = 'field';
-        const lab = document.createElement('label');
-        lab.textContent = l;
-        const inp = numInput(profile[k], k === 'sides' ? 1 : 'any');
-        inp.addEventListener('input', () => {
-          if (inp.value === '' || !Number.isFinite(+inp.value)) return;
-          this.set('profile', { ...this.params.profile, [k]: +inp.value });
-        });
-        f.append(lab, inp);
-        grid.appendChild(f);
-      }
-      box.appendChild(grid);
-    }
-    return box;
   }
 
   activate(key) {
@@ -366,8 +354,6 @@ export class FeatureForm {
   }
 }
 
-export const PROFILE_LABELS = Object.fromEntries(Object.entries(PROFILE_TYPES).map(([k, v]) => [k, v.l]));
-
 function numInput(v, step, min) {
   const inp = document.createElement('input');
   inp.type = 'number';
@@ -399,31 +385,4 @@ function vec3Input(v, onChange) {
 /** Point of a topological reference ({p, n} from the server, or a legacy [x, y, z]). */
 export function refPoint(r) {
   return Array.isArray(r) ? r : r.p;
-}
-
-/** Profile outline (closed polyline) in the sketch plane's local XY. */
-export function profileOutline(p) {
-  const cx = +p.cx || 0;
-  const cy = +p.cy || 0;
-  if (p.type === 'rectangle') {
-    const w = (+p.width || 0) / 2;
-    const h = (+p.height || 0) / 2;
-    return [[cx - w, cy - h], [cx + w, cy - h], [cx + w, cy + h], [cx - w, cy + h]];
-  }
-  if (p.type === 'circle' || p.type === 'polygon') {
-    const n = p.type === 'circle' ? 64 : Math.max(3, Math.round(+p.sides || 3));
-    const r = +p.radius || 0;
-    return Array.from({ length: n }, (_, i) => {
-      const a = (i / n) * Math.PI * 2;
-      return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
-    });
-  }
-  return (p.points || []).map((q) => [+q[0], +q[1]]);
-}
-
-/** Map local sketch coordinates to world, matching cad3d.kernel.place_on_plane. */
-export function sketchToWorld(plane, [x, y], z) {
-  if (plane === 'XZ') return [x, -z, y];
-  if (plane === 'YZ') return [z, x, y];
-  return [x, y, z];
 }

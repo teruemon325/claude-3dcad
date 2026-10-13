@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import kernel as K
+from . import sketch as S
 from .document import FEATURE_TYPES, DEFAULT_PARAMS, Document, FeatureError
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -43,6 +44,16 @@ class BodyMeta(BaseModel):
     name: str | None = None
     color: str | None = None
     visible: bool | None = None
+
+
+class Preview(BaseModel):
+    type: str
+    params: dict[str, Any]
+    feature: str | None = None
+
+
+class SketchBody(BaseModel):
+    sketch: dict[str, Any]
 
 
 class PickEdge(BaseModel):
@@ -146,7 +157,8 @@ def create_app(doc: Document | None = None) -> FastAPI:
 
     @app.put("/api/bodies/{bid}")
     def body_meta(bid: str, body: BodyMeta):
-        D().body(bid)
+        if bid not in D().result().sketches:
+            D().body(bid)
         D().set_body_meta(bid, name=body.name, color=body.color, visible=body.visible)
         return ok()
 
@@ -158,6 +170,23 @@ def create_app(doc: Document | None = None) -> FastAPI:
                 return {"ref": K.pick_edge(b.brep, body.edge)}
             except IndexError as ex:
                 raise HTTPException(400, "edge index out of range") from ex
+
+    @app.post("/api/preview")
+    def preview(body: Preview):
+        return D().preview(body.type, body.params, body.feature)
+
+    @app.post("/api/sketch/describe")
+    def sketch_describe(body: SketchBody):
+        try:
+            return S.describe(body.sketch)
+        except S.SketchError as ex:
+            raise HTTPException(400, str(ex)) from ex
+
+    @app.post("/api/pick/plane")
+    def pick_plane(body: PickFace):
+        b = D().body(body.body)
+        with K.LOCK:
+            return {"plane": K.plane_from_face(b.brep, tuple(body.point))}
 
     @app.post("/api/pick/face")
     def pick_face(body: PickFace):

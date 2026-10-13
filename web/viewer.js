@@ -49,6 +49,18 @@ export class Viewer {
     scene.add(this.overlay);
     this.preview = new THREE.Group();
     scene.add(this.preview);
+    this.sketchGroup = new THREE.Group();
+    scene.add(this.sketchGroup);
+    this.previewBodies = new THREE.Group();
+    scene.add(this.previewBodies);
+    this.sketches = [];
+    this.hiddenSketch = null;
+    this.hiddenBodies = new Set();
+    this.profileSel = null; // { sketch, points }
+    this.activeCamera = camera;
+    this.ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1e5);
+    this.ortho.add(key.clone());
+    scene.add(this.ortho);
     this._buildGrid(100);
 
     this.raycaster = new THREE.Raycaster();
@@ -56,8 +68,8 @@ export class Viewer {
     new ResizeObserver(() => this._resize()).observe(container);
     this._resize();
     const loop = () => {
-      controls.update();
-      renderer.render(scene, camera);
+      if (this.activeCamera === camera) controls.update();
+      renderer.render(scene, this.activeCamera);
       requestAnimationFrame(loop);
     };
     loop();
@@ -124,7 +136,20 @@ export class Viewer {
   }
 
   _hit(e) {
-    this.raycaster.setFromCamera(this._ndc(e), this.camera);
+    this.raycaster.setFromCamera(this._ndc(e), this.activeCamera);
+    if (this.pickMode === 'profile' || this.pickMode === 'sketch') {
+      const regions = this.sketchGroup.children.filter((o) => o.userData.region && o.visible
+        && (!this.pickFilter || o.userData.sketch === this.pickFilter));
+      const rh = this.raycaster.intersectObjects(regions, false)[0];
+      if (rh) return { kind: 'profile', sketch: rh.object.userData.sketch, point: rh.object.userData.local(rh.point), world: rh.point.toArray() };
+      if (this.pickMode === 'sketch') {
+        this.raycaster.params.Line.threshold = this.camera.position.distanceTo(this.controls.target) * 0.006;
+        const lines = this.sketchGroup.children.filter((o) => o.isLine && o.visible);
+        const lh = this.raycaster.intersectObjects(lines, false)[0];
+        if (lh) return { kind: 'profile', sketch: lh.object.userData.sketch, point: null, world: lh.point.toArray() };
+      }
+      return null;
+    }
     const dist = this.camera.position.distanceTo(this.controls.target);
     this.raycaster.params.Line.threshold = dist * 0.006;
     const meshes = [];
@@ -146,7 +171,7 @@ export class Viewer {
     }
     if (!faceHit) return null;
     const body = faceHit.object.userData.body;
-    if (this.pickMode === 'face') return { kind: 'face', body, point };
+    if (this.pickMode === 'face' || this.pickMode === 'plane') return { kind: 'face', body, point };
     return { kind: 'body', body, point };
   }
 
@@ -166,6 +191,14 @@ export class Viewer {
       line.material = new THREE.LineBasicMaterial({ color: HILITE, depthTest: false });
       line.renderOrder = 10;
       this.hover = { obj: line, restore: (o) => { o.material.dispose(); o.material = prev; o.renderOrder = 1; } };
+    } else if (hit.kind === 'profile') {
+      const objs = this.sketchGroup.children.filter((o) => o.userData.region && o.userData.sketch === hit.sketch
+        && hit.point && regionContains(o.userData.region, hit.point));
+      const o = objs.sort((a, b) => a.userData.region.area - b.userData.region.area)[0];
+      if (!o) return;
+      const prev = o.material.opacity;
+      o.material.opacity = Math.min(0.75, prev + 0.3);
+      this.hover = { obj: o.material, restore: (m) => { m.opacity = prev; } };
     } else if (hit.kind === 'body' || hit.kind === 'face') {
       const mat = b.mesh.material;
       const prev = mat.emissive.getHex();
@@ -180,6 +213,7 @@ export class Viewer {
     this._setHover(null);
     this.renderer.domElement.style.cursor = mode ? 'pointer' : '';
     this._applyStyle();
+    this.setSketches();
   }
 
   /** bodies: [{id, color, visible, mesh: {positions, normals, indices, edges}}] */
@@ -194,7 +228,8 @@ export class Viewer {
       if (b && b.data !== item.mesh) { this._dispose(b); this.bodies.delete(item.id); b = null; }
       if (!b && item.mesh) b = this._build(item);
       if (!b) continue;
-      b.group.visible = item.visible;
+      b.group.visible = item.visible && !this.hiddenBodies.has(item.id);
+      b.wantVisible = item.visible;
       b.mesh.material.color.set(item.color);
     }
     this._applyStyle();
@@ -241,13 +276,127 @@ export class Viewer {
   _applyStyle() {
     for (const [id, b] of this.bodies) {
       const m = b.mesh.material;
-      m.transparent = this.xray;
-      m.opacity = this.xray ? 0.35 : 1;
-      m.depthWrite = !this.xray;
+      const ghost = this.xray || this.activeCamera === this.ortho;
+      m.transparent = ghost;
+      m.opacity = ghost ? 0.3 : 1;
+      m.depthWrite = !ghost;
       const sel = this.selectedBodies.has(id);
       m.emissive.setHex(sel ? 0x0b2a5c : 0x000000);
       for (const e of b.edges) e.visible = this.showEdges || this.pickMode === 'edge';
     }
+  }
+
+  // ---------------------------------------------------------- sketch view
+
+  setSketchView({ plane, cx, cy, scale, width, height }) {
+    const { o, x, y, n } = frameOf(plane);
+    const center = o.clone().addScaledVector(x, cx).addScaledVector(y, cy);
+    const hw = width / 2 / scale;
+    const hh = height / 2 / scale;
+    const cam = this.ortho;
+    const D = Math.max(1000, (hw + hh) * 50);
+    Object.assign(cam, { left: -hw, right: hw, top: hh, bottom: -hh, near: D * 0.001, far: D * 2 });
+    cam.up.copy(y);
+    cam.position.copy(center).addScaledVector(n, D);
+    cam.lookAt(center);
+    cam.updateProjectionMatrix();
+    const entering = this.activeCamera !== cam;
+    this.activeCamera = cam;
+    this.controls.enabled = false;
+    this._sketchCenter = center;
+    this._sketchDist = Math.max(hw, hh) * 2.5;
+    this._sketchNormal = n;
+    if (entering) this._applyStyle();
+  }
+
+  exitSketchView() {
+    if (this.activeCamera !== this.ortho) return;
+    this.activeCamera = this.camera;
+    this.controls.enabled = true;
+    // continue in 3D looking at the sketch from a slight angle
+    if (this._sketchCenter) {
+      const dir = this._sketchNormal.clone().add(new THREE.Vector3(0.35, -0.45, 0.3)).normalize();
+      this.controls.target.copy(this._sketchCenter);
+      this.camera.position.copy(this._sketchCenter).addScaledVector(dir, this._sketchDist);
+    }
+    this._applyStyle();
+  }
+
+  /** sketches: [{id, visible, plane, curves:[{points, construction}], regions:[{outer, holes, point, area}]}] */
+  setSketches(list = this.sketches) {
+    this.sketches = list;
+    this._clearGroup(this.sketchGroup);
+    const css = getComputedStyle(document.documentElement);
+    const lineColor = new THREE.Color(css.getPropertyValue('--sk-3d').trim() || '#1d4f91');
+    for (const sk of list) {
+      const show = sk.visible || (this.profileSel && this.profileSel.sketch === sk.id) || this.pickMode === 'sketch' || this.pickMode === 'profile';
+      if (!show || sk.id === this.hiddenSketch) continue;
+      const { o, x, y, n } = frameOf(sk.plane);
+      const toW = ([u, v]) => o.clone().addScaledVector(x, u).addScaledVector(y, v);
+      for (const c of sk.curves) {
+        const geo = new THREE.BufferGeometry().setFromPoints(c.points.map(toW));
+        const mat = c.construction
+          ? new THREE.LineDashedMaterial({ color: lineColor, dashSize: this.markerSize() * 1.5, gapSize: this.markerSize(), transparent: true, opacity: 0.6 })
+          : new THREE.LineBasicMaterial({ color: lineColor });
+        const line = new THREE.Line(geo, mat);
+        if (c.construction) line.computeLineDistances();
+        line.userData = { sketch: sk.id };
+        line.renderOrder = 5;
+        this.sketchGroup.add(line);
+      }
+      const basis = new THREE.Matrix4().makeBasis(x, y, n).setPosition(o);
+      const inv = basis.clone().invert();
+      const selected = this.profileSel && this.profileSel.sketch === sk.id ? this.profileSel : null;
+      for (const r of sk.regions) {
+        const shape = new THREE.Shape(r.outer.map(([u, v]) => new THREE.Vector2(u, v)));
+        for (const h of r.holes) shape.holes.push(new THREE.Path(h.map(([u, v]) => new THREE.Vector2(u, v))));
+        const geo = new THREE.ShapeGeometry(shape);
+        const isSel = selected && (selected.points.length
+          ? selected.points.some((q) => regionContains(r, q) && smallestContaining(sk.regions, q) === r)
+          : r.depth % 2 === 0);
+        const mat = new THREE.MeshBasicMaterial({
+          color: isSel ? 0x2f6fdb : 0x6f8fb8, transparent: true, opacity: isSel ? 0.45 : 0.12,
+          side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.applyMatrix4(basis);
+        mesh.userData = {
+          sketch: sk.id, region: r,
+          local: (p) => { const q = p.clone().applyMatrix4(inv); return [q.x, q.y]; },
+        };
+        mesh.renderOrder = 4;
+        this.sketchGroup.add(mesh);
+      }
+    }
+  }
+
+  setHiddenSketch(id) { this.hiddenSketch = id; this.setSketches(); }
+
+  setProfileSelection(sel) { this.profileSel = sel; this.setSketches(); }
+
+  /** Show a feature preview: translucent result meshes, hiding the bodies they replace. */
+  setPreviewBodies(pv) {
+    this._clearGroup(this.previewBodies);
+    this.hiddenBodies = new Set();
+    if (pv) {
+      for (const id of pv.removed || []) this.hiddenBodies.add(id);
+      for (const b of pv.bodies || []) {
+        if (b.replaces) this.hiddenBodies.add(b.replaces);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(b.mesh.positions, 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(b.mesh.normals, 3));
+        const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+          color: 0xf29b38, transparent: true, opacity: 0.6, roughness: 0.6, side: THREE.DoubleSide, depthWrite: false,
+        }));
+        this.previewBodies.add(mesh);
+        for (const pts of b.mesh.edges) {
+          const g = new THREE.BufferGeometry();
+          g.setAttribute('position', new THREE.Float32BufferAttribute(pts.length >= 6 ? pts : pts.concat(pts), 3));
+          this.previewBodies.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x8a4b00 })));
+        }
+      }
+    }
+    for (const [id, b] of this.bodies) b.group.visible = (b.wantVisible ?? true) && !this.hiddenBodies.has(id);
   }
 
   setEdgesVisible(v) { this.showEdges = v; this._applyStyle(); }
@@ -357,6 +506,35 @@ export class Viewer {
     this.camera.position.copy(this.controls.target).add(v);
     this.fit();
   }
+}
+
+function frameOf(plane) {
+  const o = new THREE.Vector3(...plane.origin);
+  const x = new THREE.Vector3(...plane.x).normalize();
+  const y0 = new THREE.Vector3(...plane.y);
+  const y = y0.sub(x.clone().multiplyScalar(y0.dot(x))).normalize();
+  const n = new THREE.Vector3().crossVectors(x, y);
+  return { o, x, y, n };
+}
+
+function pointInPoly([px, py], poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+export function regionContains(r, q) {
+  return pointInPoly(q, r.outer) && !r.holes.some((h) => pointInPoly(q, h));
+}
+
+function smallestContaining(regions, q) {
+  let best = null;
+  for (const r of regions) if (regionContains(r, q) && (!best || r.area < best.area)) best = r;
+  return best;
 }
 
 function niceStep(x) {

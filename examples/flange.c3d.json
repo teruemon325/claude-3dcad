@@ -4,95 +4,405 @@
  "name": "flange",
  "features": [
   {
-   "id": "a7478f88",
-   "type": "cylinder",
-   "name": "Flange",
+   "id": "0f8117da",
+   "type": "sketch",
+   "name": "BaseSketch",
    "suppressed": false,
    "params": {
-    "origin": [
-     0,
-     0,
-     0
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x": [
+      1,
+      0,
+      0
+     ],
+     "y": [
+      0,
+      1,
+      0
+     ]
+    },
+    "points": [
+     {
+      "id": "o",
+      "x": 0,
+      "y": 0
+     }
     ],
-    "radius": 40,
-    "height": 8
+    "entities": [
+     {
+      "id": "e2",
+      "type": "circle",
+      "c": "o",
+      "r": 40,
+      "construction": false
+     }
+    ],
+    "constraints": [
+     {
+      "id": "k5",
+      "type": "diameter",
+      "refs": [
+       "e2"
+      ],
+      "value": 80,
+      "angle": 45
+     }
+    ]
    }
   },
   {
-   "id": "4891a5d5",
+   "id": "693d21ed",
+   "type": "extrude",
+   "name": "Flange",
+   "suppressed": false,
+   "params": {
+    "sketch": "0f8117da",
+    "profiles": [],
+    "extent": "distance",
+    "distance": 8,
+    "flip": false,
+    "mode": "new",
+    "target": null
+   }
+  },
+  {
+   "id": "436a1a05",
+   "type": "sketch",
+   "name": "HubProfile",
+   "suppressed": false,
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x": [
+      1,
+      0,
+      0
+     ],
+     "y": [
+      0,
+      0,
+      1
+     ]
+    },
+    "points": [
+     {
+      "id": "o",
+      "x": 0,
+      "y": 0
+     },
+     {
+      "id": "a",
+      "x": 8,
+      "y": 8
+     },
+     {
+      "id": "b",
+      "x": 20,
+      "y": 8
+     },
+     {
+      "id": "c",
+      "x": 14,
+      "y": 40
+     },
+     {
+      "id": "d",
+      "x": 8,
+      "y": 40
+     }
+    ],
+    "entities": [
+     {
+      "id": "e1",
+      "type": "line",
+      "p1": "a",
+      "p2": "b",
+      "construction": false
+     },
+     {
+      "id": "e2",
+      "type": "line",
+      "p1": "b",
+      "p2": "c",
+      "construction": false
+     },
+     {
+      "id": "e3",
+      "type": "line",
+      "p1": "c",
+      "p2": "d",
+      "construction": false
+     },
+     {
+      "id": "e4",
+      "type": "line",
+      "p1": "d",
+      "p2": "a",
+      "construction": false
+     }
+    ],
+    "constraints": [
+     {
+      "id": "k1",
+      "type": "horizontal",
+      "refs": [
+       "e1"
+      ]
+     },
+     {
+      "id": "k2",
+      "type": "horizontal",
+      "refs": [
+       "e3"
+      ]
+     },
+     {
+      "id": "k3",
+      "type": "vertical",
+      "refs": [
+       "e4"
+      ]
+     },
+     {
+      "id": "k4",
+      "type": "hdistance",
+      "refs": [
+       "o",
+       "a"
+      ],
+      "value": 8,
+      "sign": 1,
+      "offset": -4
+     },
+     {
+      "id": "k5",
+      "type": "vdistance",
+      "refs": [
+       "o",
+       "a"
+      ],
+      "value": 8,
+      "sign": 1,
+      "offset": -4
+     },
+     {
+      "id": "k6",
+      "type": "length",
+      "refs": [
+       "e1"
+      ],
+      "value": 12,
+      "offset": -4
+     },
+     {
+      "id": "k7",
+      "type": "length",
+      "refs": [
+       "e3"
+      ],
+      "value": 6,
+      "offset": 4
+     },
+     {
+      "id": "k8",
+      "type": "length",
+      "refs": [
+       "e4"
+      ],
+      "value": 32,
+      "offset": -4
+     }
+    ]
+   }
+  },
+  {
+   "id": "325ae7b8",
    "type": "revolve",
    "name": "Hub",
    "suppressed": false,
    "params": {
-    "points": [
-     [
-      0,
-      8
-     ],
-     [
-      20,
-      8
-     ],
-     [
-      20,
-      10
-     ],
-     [
-      14,
-      40
-     ],
-     [
-      0,
-      40
-     ]
-    ],
+    "sketch": "436a1a05",
+    "profiles": [],
+    "axis": "Y",
     "angle": 360,
     "mode": "join",
-    "target": "a7478f88"
+    "target": "693d21ed"
    }
   },
   {
-   "id": "5289e9f7",
+   "id": "2a22d949",
+   "type": "sketch",
+   "name": "BoreSketch",
+   "suppressed": false,
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x": [
+      1,
+      0,
+      0
+     ],
+     "y": [
+      0,
+      1,
+      0
+     ]
+    },
+    "points": [
+     {
+      "id": "o",
+      "x": 0,
+      "y": 0
+     }
+    ],
+    "entities": [
+     {
+      "id": "e2",
+      "type": "circle",
+      "c": "o",
+      "r": 8,
+      "construction": false
+     }
+    ],
+    "constraints": [
+     {
+      "id": "k5",
+      "type": "diameter",
+      "refs": [
+       "e2"
+      ],
+      "value": 16,
+      "angle": 45
+     }
+    ]
+   }
+  },
+  {
+   "id": "0b4a22ed",
    "type": "extrude",
    "name": "Bore",
    "suppressed": false,
    "params": {
-    "plane": "XY",
-    "offset": -5,
-    "profile": {
-     "type": "circle",
-     "cx": 0,
-     "cy": 0,
-     "radius": 8
-    },
-    "distance": 60,
-    "symmetric": false,
+    "sketch": "2a22d949",
+    "profiles": [],
+    "extent": "through",
+    "distance": 10,
+    "flip": false,
     "mode": "cut",
-    "target": "a7478f88"
+    "target": "693d21ed"
    }
   },
   {
-   "id": "c4b42f06",
-   "type": "cylinder",
+   "id": "ffa570a6",
+   "type": "sketch",
+   "name": "BoltSketch",
+   "suppressed": false,
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x": [
+      1,
+      0,
+      0
+     ],
+     "y": [
+      0,
+      1,
+      0
+     ]
+    },
+    "points": [
+     {
+      "id": "o",
+      "x": 0,
+      "y": 0
+     },
+     {
+      "id": "p1",
+      "x": 30,
+      "y": 0
+     }
+    ],
+    "entities": [
+     {
+      "id": "e2",
+      "type": "circle",
+      "c": "p1",
+      "r": 4,
+      "construction": false
+     }
+    ],
+    "constraints": [
+     {
+      "id": "k3",
+      "type": "hdistance",
+      "refs": [
+       "o",
+       "p1"
+      ],
+      "value": 30,
+      "sign": 1,
+      "offset": -6
+     },
+     {
+      "id": "k4",
+      "type": "horizontal",
+      "refs": [
+       "o",
+       "p1"
+      ]
+     },
+     {
+      "id": "k5",
+      "type": "diameter",
+      "refs": [
+       "e2"
+      ],
+      "value": 8,
+      "angle": 45
+     }
+    ]
+   }
+  },
+  {
+   "id": "a8222f35",
+   "type": "extrude",
    "name": "BoltHole",
    "suppressed": false,
    "params": {
-    "origin": [
-     30,
-     0,
-     -1
-    ],
-    "radius": 4,
-    "height": 10
+    "sketch": "ffa570a6",
+    "profiles": [],
+    "extent": "through",
+    "distance": 10,
+    "flip": false,
+    "mode": "new",
+    "target": null
    }
   },
   {
-   "id": "c56d3e2b",
+   "id": "1065715c",
    "type": "pattern_circular",
    "name": "BoltPattern",
    "suppressed": false,
    "params": {
-    "target": "c4b42f06",
+    "target": "a8222f35",
     "axis": [
      0,
      0,
@@ -108,24 +418,24 @@
    }
   },
   {
-   "id": "b726275e",
+   "id": "61f50544",
    "type": "boolean",
    "name": "CutHoles",
    "suppressed": false,
    "params": {
     "op": "difference",
-    "target": "a7478f88",
-    "tool": "c4b42f06",
+    "target": "693d21ed",
+    "tool": "a8222f35",
     "keep_tool": false
    }
   },
   {
-   "id": "ad64deaf",
+   "id": "6d84db92",
    "type": "fillet",
    "name": "EdgeRound",
    "suppressed": false,
    "params": {
-    "target": "a7478f88",
+    "target": "693d21ed",
     "edges": [
      {
       "p": [

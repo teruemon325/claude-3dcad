@@ -17,6 +17,7 @@ import base64
 import copy
 import hashlib
 import json
+import math
 import os
 import tempfile
 import uuid
@@ -25,15 +26,17 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from . import kernel as K
+from . import sketch as S
 
 PALETTE = ["#8fb4d9", "#d9a58f", "#9fd98f", "#d98fc8", "#d9d18f", "#8fd9cf", "#b39fd9", "#c0c0c0"]
 
 PRIMITIVES = ("box", "cylinder", "sphere", "cone", "torus", "pyramid")
 SKETCH_FEATURES = ("extrude", "revolve")
 MODIFY_FEATURES = ("fillet", "chamfer", "shell", "offset", "transform", "mirror", "pattern_linear", "pattern_circular")
-FEATURE_TYPES = PRIMITIVES + SKETCH_FEATURES + MODIFY_FEATURES + ("boolean", "delete_body", "import_usd")
+FEATURE_TYPES = ("sketch",) + PRIMITIVES + SKETCH_FEATURES + MODIFY_FEATURES + ("boolean", "delete_body", "import_usd")
 
 TYPE_LABELS = {
+    "sketch": "Sketch",
     "box": "Box",
     "cylinder": "Cylinder",
     "sphere": "Sphere",
@@ -62,17 +65,25 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     "cone": {"origin": [0, 0, 0], "radius_base": 10, "radius_top": 0, "height": 20},
     "torus": {"origin": [0, 0, 0], "radius_major": 15, "radius_minor": 4},
     "pyramid": {"origin": [0, 0, 0], "length": 20, "height": 20},
+    "sketch": {
+        "plane": S.STANDARD_PLANES["XY"],
+        "points": [{"id": "o", "x": 0, "y": 0}],
+        "entities": [],
+        "constraints": [],
+    },
     "extrude": {
-        "plane": "XY",
-        "offset": 0,
-        "profile": {"type": "rectangle", "cx": 0, "cy": 0, "width": 20, "height": 10},
+        "sketch": None,
+        "profiles": [],
+        "extent": "distance",
         "distance": 10,
-        "symmetric": False,
+        "flip": False,
         "mode": "new",
         "target": None,
     },
     "revolve": {
-        "points": [[5, 0], [10, 0], [10, 5], [5, 10]],
+        "sketch": None,
+        "profiles": [],
+        "axis": "Y",
         "angle": 360,
         "mode": "new",
         "target": None,
@@ -127,6 +138,7 @@ def _feature_sig(feature: dict) -> str:
 class RegenResult:
     bodies: "OrderedDict[str, Body]"
     status: dict[str, dict] = field(default_factory=dict)
+    sketches: "OrderedDict[str, dict]" = field(default_factory=OrderedDict)
 
 
 class BrepCache:
@@ -311,7 +323,7 @@ class Document:
                 res.status[f["id"]] = {"state": "suppressed"}
                 continue
             try:
-                self._apply(f, res.bodies)
+                self._apply(f, res)
                 res.status[f["id"]] = {"state": "ok"}
             except (FeatureError, K.KernelError, RuntimeError, KeyError, ValueError, TypeError, IndexError) as ex:
                 res.status[f["id"]] = {"state": "error", "message": _clean_error(ex)}
@@ -341,6 +353,26 @@ class Document:
         bodies[bid] = b
         return b
 
+    @staticmethod
+    def _extent(p: dict, sk_params: dict, bodies: dict) -> tuple[float, float]:
+        """(start offset, signed length) along the sketch normal."""
+        d = float(p.get("distance", 10))
+        extent = p.get("extent", "distance")
+        if extent == "symmetric":
+            return -abs(d) / 2, abs(d)
+        if extent == "through":
+            o, _, _, n = S.frame(sk_params.get("plane") or S.STANDARD_PLANES["XY"])
+            reach = 1.0
+            for b in bodies.values():
+                lo, hi = b.brep.bounding_box()
+                for cx in (lo[0], hi[0]):
+                    for cy in (lo[1], hi[1]):
+                        for cz in (lo[2], hi[2]):
+                            reach = max(reach, abs((cx - o[0]) * n[0] + (cy - o[1]) * n[1] + (cz - o[2]) * n[2]))
+            reach = float(math.ceil(reach * 1.1 + 1))
+            return -reach, 2 * reach
+        return 0.0, -d if p.get("flip") else d
+
     def _combine(self, bodies: dict, f: dict, brep, sig: str) -> None:
         """Handle the new/join/cut/intersect mode of sketch-based features."""
         p = f["params"]
@@ -356,15 +388,37 @@ class Document:
         tgt.brep = self._cached(new_sig, lambda: K.boolean(op, tgt.brep, brep))
         tgt.sig = new_sig
 
-    def _apply(self, f: dict, bodies: "OrderedDict[str, Body]") -> None:
+    def _apply(self, f: dict, res: RegenResult) -> None:
+        bodies = res.bodies
         t, p = f["type"], f["params"]
+        if t in SKETCH_FEATURES and not _is_legacy(f):
+            # the result depends on the referenced sketch's content too
+            sk = res.sketches.get(p.get("sketch") or "")
+            if sk is None:
+                raise FeatureError("no sketch selected" if not p.get("sketch") else "the sketch does not exist at this point")
+            f = {**f, "params": {**p, "_sketch": sk}}
         sig = hashlib.sha1(_feature_sig(f).encode()).hexdigest()
+
+        if t == "sketch":
+            S.Sketch.from_params(p)  # validates references
+            res.sketches[f["id"]] = p
+            return
 
         if t in PRIMITIVES:
             builder = getattr(K, t)
             args = {k: v for k, v in p.items() if k != "origin"}
             brep = self._cached(sig, lambda: builder(tuple(p["origin"]), **args))
             self._new_body(bodies, f, brep, sig)
+        elif t == "extrude" and not _is_legacy(f):
+            sk_params = f["params"]["_sketch"]
+            z0, length = self._extent(p, sk_params, bodies)
+            sig = hashlib.sha1(f"{sig}:{z0}:{length}".encode()).hexdigest()
+            brep = self._cached(sig + ":tool", lambda: K.sketch_extrude(sk_params, p.get("profiles"), z0, length))
+            self._combine(bodies, f, brep, sig)
+        elif t == "revolve" and not _is_legacy(f):
+            brep = self._cached(sig + ":tool", lambda: K.sketch_revolve(f["params"]["_sketch"], p.get("profiles"),
+                                                                      p.get("axis", "Y"), p.get("angle", 360)))
+            self._combine(bodies, f, brep, sig)
         elif t == "extrude":
             brep = self._cached(sig + ":tool", lambda: K.extrude(
                 p["profile"], p["distance"], p.get("plane", "XY"), p.get("offset", 0), p.get("symmetric", False)))
@@ -461,6 +515,62 @@ class Document:
         with K.LOCK:
             return K.properties(self.body(body_id).brep)
 
+    def sketch_list(self) -> list[dict]:
+        res = self.result()
+        consumed = {
+            f["params"].get("sketch")
+            for i, f in enumerate(self.features)
+            if i < self.active_count() and not f.get("suppressed") and f["type"] in SKETCH_FEATURES
+        }
+        names = {f["id"]: f["name"] for f in self.features}
+        out = []
+        for sid, params in res.sketches.items():
+            meta = self.body_meta.get(sid, {})
+            out.append({
+                "id": sid,
+                "name": names.get(sid, sid),
+                "visible": meta.get("visible", sid not in consumed),
+                **S.describe(params),
+            })
+        return out
+
+    def preview(self, ftype: str, params: dict, fid: str | None = None) -> dict:
+        """Evaluate a feature without committing it; returns meshes of the bodies it changes."""
+        if ftype not in FEATURE_TYPES:
+            raise FeatureError(f"unknown feature type: {ftype}")
+        current = self.result()
+        tmp = Document()
+        tmp._cache, tmp._mesh_cache = self._cache, self._mesh_cache
+        tmp.features = copy.deepcopy(self.features)
+        if fid:
+            i = self._index(fid)
+            tmp.features[i]["params"] = copy.deepcopy(params)
+            tmp.features[i]["suppressed"] = False
+            tmp.rollback = i + 1
+            pid = fid
+        else:
+            pos = self.active_count()
+            pid = "__preview__"
+            tmp.features.insert(pos, {"id": pid, "type": ftype, "name": "Preview", "suppressed": False,
+                                      "params": copy.deepcopy(params)})
+            tmp.rollback = pos + 1
+        res = tmp.result()
+        st = res.status.get(pid, {"state": "error", "message": "not evaluated"})
+        before = {b.id: b.sig for b in current.bodies.values()}
+        changed = [b for b in res.bodies.values() if before.get(b.id) != b.sig]
+        removed = [bid for bid in before if bid not in res.bodies]
+        meshes = []
+        if st["state"] == "ok":
+            for b in changed:
+                key = f"{b.sig}:normal"
+                m = self._mesh_cache.get(key)
+                if m is None:
+                    with K.LOCK:
+                        m = K.mesh(b.brep, "normal")
+                    self._mesh_cache[key] = m
+                meshes.append({"id": b.id, "replaces": b.id if b.id in before else None, "mesh": m})
+        return {"status": st, "bodies": meshes, "removed": removed if st["state"] == "ok" else []}
+
     def state(self) -> dict:
         res = self.result()
         return {
@@ -470,9 +580,16 @@ class Document:
             "active": self.active_count(),
             "status": res.status,
             "bodies": self.body_list(),
+            "sketches": self.sketch_list(),
             "can_undo": bool(self._undo),
             "can_redo": bool(self._redo),
         }
+
+
+def _is_legacy(f: dict) -> bool:
+    """Extrude/revolve features from version 0.1 carry their own profile instead of a sketch."""
+    p = f["params"]
+    return not p.get("sketch") and ("profile" in p or "points" in p)
 
 
 def _import_usd_data(filename: str, data_b64: str) -> list:

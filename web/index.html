@@ -35,24 +35,30 @@
     <input type="file" id="fileImport" accept=".usd,.usda,.usdc" hidden>
   </header>
 
-  <nav id="ribbon">
+  <nav id="ribbon" class="ribbon">
     <div class="rgroup">
       <div class="rbuttons">
-        <button data-feature="box"><i>▣</i>ボックス</button>
-        <button data-feature="cylinder"><i>⌭</i>円柱</button>
-        <button data-feature="sphere"><i>●</i>球</button>
-        <button data-feature="cone"><i>▲</i>円錐</button>
-        <button data-feature="torus"><i>◎</i>トーラス</button>
-        <button data-feature="pyramid"><i>△</i>角錐</button>
+        <button data-cmd="sketch" class="big"><i>✎</i>新規スケッチ</button>
       </div>
-      <div class="rlabel">プリミティブ</div>
+      <div class="rlabel">スケッチ</div>
     </div>
     <div class="rgroup">
       <div class="rbuttons">
         <button data-feature="extrude"><i>⇧</i>押し出し</button>
         <button data-feature="revolve"><i>↻</i>回転</button>
+        <div class="menu">
+          <button class="menu-btn"><i>▣</i>プリミティブ ▾</button>
+          <div class="menu-list">
+            <button data-feature="box">▣ ボックス</button>
+            <button data-feature="cylinder">⌭ 円柱</button>
+            <button data-feature="sphere">● 球</button>
+            <button data-feature="cone">▲ 円錐</button>
+            <button data-feature="torus">◎ トーラス</button>
+            <button data-feature="pyramid">△ 角錐</button>
+          </div>
+        </div>
       </div>
-      <div class="rlabel">スケッチ</div>
+      <div class="rlabel">作成</div>
     </div>
     <div class="rgroup">
       <div class="rbuttons">
@@ -70,7 +76,7 @@
         <button data-feature="mirror"><i>⇋</i>ミラー</button>
         <button data-feature="pattern_linear"><i>⋯</i>矩形状</button>
         <button data-feature="pattern_circular"><i>✲</i>円形状</button>
-        <button data-feature="delete_body"><i>✕</i>ボディ削除</button>
+        <button data-feature="delete_body"><i>✕</i>削除</button>
       </div>
       <div class="rlabel">配置</div>
     </div>
@@ -88,11 +94,68 @@
     </div>
   </nav>
 
+  <nav id="sketchRibbon" class="ribbon">
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-tool="select" title="選択 (S)"><i>↖</i>選択</button>
+        <button data-tool="line" title="線 (L)"><i>╱</i>線</button>
+        <button data-tool="rect" title="矩形 (R)"><i>▭</i>矩形</button>
+        <button data-tool="circle" title="円 (C)"><i>○</i>円</button>
+        <button data-tool="arc" title="円弧 (A)"><i>◠</i>円弧</button>
+        <button data-tool="point" title="点 (P)"><i>·</i>点</button>
+      </div>
+      <div class="rlabel">作成</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-tool="dimension" title="寸法 (D)"><i>↔</i>寸法</button>
+      </div>
+      <div class="rlabel">寸法</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-constraint="coincident" title="一致: 点+点 / 点+線・円"><i>●</i>一致</button>
+        <button data-constraint="horizontal" title="水平 (H)"><i>━</i>水平</button>
+        <button data-constraint="vertical" title="垂直 (V)"><i>┃</i>垂直</button>
+        <button data-constraint="parallel" title="平行: 線+線"><i>∥</i>平行</button>
+        <button data-constraint="perpendicular" title="直交: 線+線"><i>⊥</i>直交</button>
+        <button data-constraint="equal" title="等しい: 線どうし / 円・弧どうし"><i>=</i>等しい</button>
+        <button data-constraint="tangent" title="正接: 線+円弧 / 円弧+円弧"><i>T</i>正接</button>
+        <button data-constraint="midpoint" title="中点: 点+線"><i>M</i>中点</button>
+        <button data-constraint="concentric" title="同心: 円+円"><i>◎</i>同心</button>
+        <button data-constraint="symmetric" title="対称: 点+点+線"><i>⇔</i>対称</button>
+        <button data-constraint="fix" title="固定"><i>⚓</i>固定</button>
+      </div>
+      <div class="rlabel">拘束 (図形を選択してからクリック)</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-sk="construction" title="構築線に切り替え (X)"><i>┄</i>構築線</button>
+        <button data-sk="delete" title="削除 (Delete)"><i>✕</i>削除</button>
+        <button data-sk="undo" title="元に戻す (Ctrl+Z)"><i>↶</i>戻す</button>
+        <button data-sk="redo" title="やり直し (Ctrl+Y)"><i>↷</i>やり直し</button>
+        <button data-sk="snap" title="グリッドにスナップ"><i>#</i>スナップ</button>
+        <button data-sk="fit" title="全体表示 (F)"><i>⛶</i>全体</button>
+      </div>
+      <div class="rlabel">編集</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-sk="finish" class="finish"><i>✓</i>スケッチ終了</button>
+      </div>
+      <div class="rlabel">終了</div>
+    </div>
+  </nav>
+
   <main>
     <aside id="left">
       <section>
         <h3>ボディ</h3>
         <ul id="bodyList" class="list"></ul>
+      </section>
+      <section>
+        <h3>スケッチ</h3>
+        <ul id="sketchList" class="list"></ul>
       </section>
       <section class="grow">
         <h3>履歴 <span class="hint">クリックで編集 / ▶でロールバック</span></h3>
