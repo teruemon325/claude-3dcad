@@ -612,7 +612,7 @@ async function exportFile(fmt) {
     const r = await fetch(`/api/export/${fmt}`);
     if (!r.ok) throw new Error((await r.json()).detail);
     const blob = await r.blob();
-    const name = { stl: `${safeName()}.stl`, usda: `${safeName()}.usda`, 'usda-mesh': `${safeName()}_mesh.usda` }[fmt];
+    const name = { step: `${safeName()}.step`, stl: `${safeName()}.stl`, usda: `${safeName()}.usda`, 'usda-mesh': `${safeName()}_mesh.usda` }[fmt];
     download(name, blob);
     status(`${name} をエクスポートしました`);
   } catch (e) {
@@ -636,6 +636,7 @@ const COMMANDS = {
     status('プロジェクトを保存しました');
   },
   import: () => $('#fileImport').click(),
+  'export-step': () => exportFile('step'),
   'export-usda': () => exportFile('usda'),
   'export-usda-mesh': () => exportFile('usda-mesh'),
   'export-stl': () => exportFile('stl'),

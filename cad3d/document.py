@@ -599,6 +599,13 @@ def _import_usd_data(filename: str, data_b64: str) -> list:
         path = os.path.join(d, "import" + suffix)
         with open(path, "wb") as fh:
             fh.write(raw)
+        if suffix.lower() in (".step", ".stp"):
+            from . import step
+
+            try:
+                return step.import_step(path)
+            except step.StepError as ex:
+                raise FeatureError(str(ex)) from ex
         return K.import_usd(path)
 
 

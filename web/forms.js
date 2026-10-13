@@ -158,7 +158,7 @@ export const FEATURES = {
     ],
   },
   delete_body: { label: 'ボディ削除', icon: '✕', fields: [{ k: 'target', t: 'body', l: 'ボディ' }] },
-  import_usd: { label: 'インポート', icon: '⇩', desc: 'USD ファイルから読み込んだ BRep。', fields: [{ k: 'filename', t: 'text', l: 'ファイル', readonly: true }] },
+  import_usd: { label: 'インポート', icon: '⇩', desc: 'STEP / USD ファイルから読み込んだ BRep。', fields: [{ k: 'filename', t: 'text', l: 'ファイル', readonly: true }] },
 };
 
 /** Renders a feature's parameters and manages viewport pick targets. */

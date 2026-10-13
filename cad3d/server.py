@@ -213,8 +213,15 @@ def create_app(doc: Document | None = None) -> FastAPI:
         raw = await file.read()
         name = file.filename or "import.usd"
         ext = os.path.splitext(name)[1].lower()
-        if ext not in (".usd", ".usda", ".usdc"):
-            raise HTTPException(400, "only .usd / .usda / .usdc files with BRep data can be imported")
+        if ext not in (".usd", ".usda", ".usdc", ".step", ".stp"):
+            raise HTTPException(400, "only STEP (.step / .stp) and USD BRep (.usd / .usda / .usdc) files can be imported")
+        if ext in (".step", ".stp"):
+            from . import step
+
+            try:
+                step.require()
+            except step.StepError as ex:
+                raise HTTPException(400, str(ex)) from ex
         D().add_feature("import_usd", {"filename": name, "data": base64.b64encode(raw).decode()},
                         name=os.path.splitext(name)[0][:40] or None)
         return ok()
@@ -242,6 +249,19 @@ def create_app(doc: Document | None = None) -> FastAPI:
             suffix = "" if fmt == "usda" else "_mesh"
             return Response(data, media_type="text/plain",
                             headers={"Content-Disposition": f'attachment; filename="{stem}{suffix}.usda"'})
+        if fmt == "step":
+            from . import step
+
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, f"{stem}.step")
+                try:
+                    with K.LOCK:
+                        step.export_step(breps, path, name=doc.name)
+                except step.StepError as ex:
+                    raise HTTPException(400, str(ex)) from ex
+                data = Path(path).read_bytes()
+            return Response(data, media_type="model/step",
+                            headers={"Content-Disposition": f'attachment; filename="{stem}.step"'})
         raise HTTPException(404, f"unknown export format: {fmt}")
 
     # ------------------------------------------------------------- web UI

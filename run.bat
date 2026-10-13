@@ -13,10 +13,15 @@ if errorlevel 1 goto nopython
 py -3.12 -m venv .venv
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install --upgrade pip
-".venv\Scripts\python.exe" -m pip install -e .
+".venv\Scripts\python.exe" -m pip install -e .[step]
 if errorlevel 1 goto failed
 
 :start
+".venv\Scripts\python.exe" -c "import OCP" >nul 2>&1
+if errorlevel 1 (
+    echo Installing STEP support ^(OpenCASCADE, about 100 MB^)...
+    ".venv\Scripts\python.exe" -m pip install -e .[step]
+)
 echo.
 echo ============================================================
 echo  Starting Claude 3DCAD (Claude 3DCAD / USD BRep kernel)

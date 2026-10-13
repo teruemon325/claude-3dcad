@@ -18,10 +18,11 @@
       <button data-cmd="new" title="新規 (Ctrl+N)">新規</button>
       <button data-cmd="open" title="プロジェクトを開く (Ctrl+O)">開く</button>
       <button data-cmd="save" title="プロジェクトを保存 (Ctrl+S)">保存</button>
-      <button data-cmd="import" title="USD (BrepArray) をインポート">インポート</button>
+      <button data-cmd="import" title="STEP / USD BRep をインポート">インポート</button>
       <div class="menu">
         <button class="menu-btn">エクスポート ▾</button>
         <div class="menu-list">
+          <button data-cmd="export-step">STEP (.step, 厳密形状)</button>
           <button data-cmd="export-usda">USD BRep (.usda, 厳密形状)</button>
           <button data-cmd="export-usda-mesh">USD Mesh (.usda)</button>
           <button data-cmd="export-stl">STL (.stl)</button>
@@ -33,7 +34,7 @@
       <button data-cmd="redo" id="btnRedo" title="やり直し (Ctrl+Y)">↷</button>
     </div>
     <input type="file" id="fileOpen" accept=".json,.c3d.json" hidden>
-    <input type="file" id="fileImport" accept=".usd,.usda,.usdc" hidden>
+    <input type="file" id="fileImport" accept=".step,.stp,.usd,.usda,.usdc" hidden>
   </header>
 
   <nav id="ribbon" class="ribbon">
