@@ -15,6 +15,11 @@
 
 Python 3.12 が必要です（`usd-brep` は cp312 の wheel のみ提供。Linux x86_64/aarch64、Windows）。
 
+**Windows**: Python 3.12 (64-bit) をインストールし、`run.bat` をダブルクリックします
+（初回のみ数分のセットアップ後、ブラウザが自動で開きます）。
+
+**Linux**:
+
 ```bash
 ./run.sh                 # .venv を作成して http://127.0.0.1:8000/ で起動
 ./run.sh --port 9000     # ポート変更
