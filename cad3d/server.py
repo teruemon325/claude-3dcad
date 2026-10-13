@@ -257,17 +257,44 @@ def create_app(doc: Document | None = None) -> FastAPI:
 app = create_app()
 
 
+DEFAULT_PORT = 8765
+
+
+def _free_port(host: str, start: int, tries: int = 20) -> int:
+    """First port from ``start`` that nothing else is listening on."""
+    import socket
+
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+            except OSError:
+                continue
+            return port
+    raise SystemExit(f"no free port in {start}-{start + tries - 1}")
+
+
 def main() -> None:
     import argparse
+    import threading
+    import webbrowser
 
     import uvicorn
 
     ap = argparse.ArgumentParser(description="claude-3dcad server")
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help=f"port to listen on; the next free one is used if it is taken (default {DEFAULT_PORT})")
+    ap.add_argument("--open", action="store_true", help="open the app in the web browser")
     args = ap.parse_args()
-    print(f"claude-3dcad: open http://{args.host}:{args.port}/ in your browser")
-    uvicorn.run(app, host=args.host, port=args.port, workers=1)
+    port = _free_port(args.host, args.port)
+    url = f"http://{args.host}:{port}/"
+    if port != args.port:
+        print(f"claude-3dcad: port {args.port} is in use by another program, using {port} instead")
+    print(f"claude-3dcad: open {url} in your browser")
+    if args.open:
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    uvicorn.run(app, host=args.host, port=port, workers=1)
 
 
 if __name__ == "__main__":

@@ -11,4 +11,4 @@ if [ ! -x .venv/bin/python ]; then
         .venv/bin/pip install -e ".[dev]"
     fi
 fi
-exec .venv/bin/python -m cad3d.server "$@"
+exec .venv/bin/python -m cad3d.server --open "$@"

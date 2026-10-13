@@ -28,7 +28,7 @@ Python 3.12 が必要です（`usd-brep` は cp312 の wheel のみ提供。Linu
 **Linux**:
 
 ```bash
-./run.sh                 # .venv を作成して http://127.0.0.1:8000/ で起動
+./run.sh                 # .venv を作成して http://127.0.0.1:8765/ で起動（使用中なら次の空き番号）
 ./run.sh --port 9000     # ポート変更
 ```
 

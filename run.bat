@@ -19,11 +19,10 @@ if errorlevel 1 goto failed
 :start
 echo.
 echo ============================================================
-echo  Claude 3DCAD is running:  http://127.0.0.1:8000/
+echo  Starting Claude 3DCAD (Claude 3DCAD / USD BRep kernel)
 echo  The browser opens automatically. Close this window to quit.
 echo ============================================================
-start "" /b cmd /c "ping -n 5 127.0.0.1 >nul & start http://127.0.0.1:8000/"
-".venv\Scripts\python.exe" -m cad3d.server
+".venv\Scripts\python.exe" -m cad3d.server --open
 pause
 exit /b 0
 
