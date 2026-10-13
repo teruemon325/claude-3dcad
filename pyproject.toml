@@ -1,0 +1,30 @@
+[project]
+name = "claude-3dcad"
+version = "0.1.0"
+description = "Parametric 3D CAD web app built on the NVIDIA USD BRep (SMLib) solid modeling kernel"
+readme = "README.md"
+# usd-brep wheels are published for CPython 3.12 only
+requires-python = "==3.12.*"
+dependencies = [
+    "usd-brep>=1.0.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+claude-3dcad = "cad3d.server:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["cad3d"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

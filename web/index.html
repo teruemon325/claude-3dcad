@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude 3DCAD</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">◆ Claude 3DCAD <span class="sub">USD BRep kernel</span></div>
+    <input id="docName" class="doc-name" title="ドキュメント名" spellcheck="false">
+    <div class="group">
+      <button data-cmd="new" title="新規 (Ctrl+N)">新規</button>
+      <button data-cmd="open" title="プロジェクトを開く (Ctrl+O)">開く</button>
+      <button data-cmd="save" title="プロジェクトを保存 (Ctrl+S)">保存</button>
+      <button data-cmd="import" title="USD (BrepArray) をインポート">インポート</button>
+      <div class="menu">
+        <button class="menu-btn">エクスポート ▾</button>
+        <div class="menu-list">
+          <button data-cmd="export-usda">USD BRep (.usda, 厳密形状)</button>
+          <button data-cmd="export-usda-mesh">USD Mesh (.usda)</button>
+          <button data-cmd="export-stl">STL (.stl)</button>
+        </div>
+      </div>
+    </div>
+    <div class="group">
+      <button data-cmd="undo" id="btnUndo" title="元に戻す (Ctrl+Z)">↶</button>
+      <button data-cmd="redo" id="btnRedo" title="やり直し (Ctrl+Y)">↷</button>
+    </div>
+    <input type="file" id="fileOpen" accept=".json,.c3d.json" hidden>
+    <input type="file" id="fileImport" accept=".usd,.usda,.usdc" hidden>
+  </header>
+
+  <nav id="ribbon">
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-feature="box"><i>▣</i>ボックス</button>
+        <button data-feature="cylinder"><i>⌭</i>円柱</button>
+        <button data-feature="sphere"><i>●</i>球</button>
+        <button data-feature="cone"><i>▲</i>円錐</button>
+        <button data-feature="torus"><i>◎</i>トーラス</button>
+        <button data-feature="pyramid"><i>△</i>角錐</button>
+      </div>
+      <div class="rlabel">プリミティブ</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-feature="extrude"><i>⇧</i>押し出し</button>
+        <button data-feature="revolve"><i>↻</i>回転</button>
+      </div>
+      <div class="rlabel">スケッチ</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-feature="fillet"><i>◜</i>フィレット</button>
+        <button data-feature="chamfer"><i>◸</i>面取り</button>
+        <button data-feature="shell"><i>▢</i>シェル</button>
+        <button data-feature="offset"><i>⧈</i>オフセット</button>
+        <button data-feature="boolean"><i>⊕</i>結合</button>
+      </div>
+      <div class="rlabel">修正</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-feature="transform"><i>✥</i>移動</button>
+        <button data-feature="mirror"><i>⇋</i>ミラー</button>
+        <button data-feature="pattern_linear"><i>⋯</i>矩形状</button>
+        <button data-feature="pattern_circular"><i>✲</i>円形状</button>
+        <button data-feature="delete_body"><i>✕</i>ボディ削除</button>
+      </div>
+      <div class="rlabel">配置</div>
+    </div>
+    <div class="rgroup">
+      <div class="rbuttons">
+        <button data-view="iso"><i>◇</i>等角</button>
+        <button data-view="top"><i>⊤</i>上</button>
+        <button data-view="front"><i>⊥</i>正面</button>
+        <button data-view="right"><i>⊢</i>右</button>
+        <button data-view="fit"><i>⛶</i>全体</button>
+        <button data-toggle="edges" class="on"><i>╱</i>エッジ</button>
+        <button data-toggle="xray"><i>◌</i>透過</button>
+      </div>
+      <div class="rlabel">表示</div>
+    </div>
+  </nav>
+
+  <main>
+    <aside id="left">
+      <section>
+        <h3>ボディ</h3>
+        <ul id="bodyList" class="list"></ul>
+      </section>
+      <section class="grow">
+        <h3>履歴 <span class="hint">クリックで編集 / ▶でロールバック</span></h3>
+        <ul id="featureList" class="list"></ul>
+      </section>
+    </aside>
+
+    <div id="viewport">
+      <div id="viewHint"></div>
+      <div id="busy" hidden>計算中…</div>
+    </div>
+
+    <aside id="right">
+      <div id="panel"></div>
+    </aside>
+  </main>
+
+  <footer id="status">
+    <span id="statusText">準備完了</span>
+    <span id="cursorPos"></span>
+  </footer>
+
+  <div id="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+{
+ "format": "claude-3dcad",
+ "version": 1,
+ "name": "flange",
+ "features": [
+  {
+   "id": "a7478f88",
+   "type": "cylinder",
+   "name": "Flange",
+   "suppressed": false,
+   "params": {
+    "origin": [
+     0,
+     0,
+     0
+    ],
+    "radius": 40,
+    "height": 8
+   }
+  },
+  {
+   "id": "4891a5d5",
+   "type": "revolve",
+   "name": "Hub",
+   "suppressed": false,
+   "params": {
+    "points": [
+     [
+      0,
+      8
+     ],
+     [
+      20,
+      8
+     ],
+     [
+      20,
+      10
+     ],
+     [
+      14,
+      40
+     ],
+     [
+      0,
+      40
+     ]
+    ],
+    "angle": 360,
+    "mode": "join",
+    "target": "a7478f88"
+   }
+  },
+  {
+   "id": "5289e9f7",
+   "type": "extrude",
+   "name": "Bore",
+   "suppressed": false,
+   "params": {
+    "plane": "XY",
+    "offset": -5,
+    "profile": {
+     "type": "circle",
+     "cx": 0,
+     "cy": 0,
+     "radius": 8
+    },
+    "distance": 60,
+    "symmetric": false,
+    "mode": "cut",
+    "target": "a7478f88"
+   }
+  },
+  {
+   "id": "c4b42f06",
+   "type": "cylinder",
+   "name": "BoltHole",
+   "suppressed": false,
+   "params": {
+    "origin": [
+     30,
+     0,
+     -1
+    ],
+    "radius": 4,
+    "height": 10
+   }
+  },
+  {
+   "id": "c56d3e2b",
+   "type": "pattern_circular",
+   "name": "BoltPattern",
+   "suppressed": false,
+   "params": {
+    "target": "c4b42f06",
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "center": [
+     0,
+     0,
+     0
+    ],
+    "count": 6,
+    "angle": 360
+   }
+  },
+  {
+   "id": "b726275e",
+   "type": "boolean",
+   "name": "CutHoles",
+   "suppressed": false,
+   "params": {
+    "op": "difference",
+    "target": "a7478f88",
+    "tool": "c4b42f06",
+    "keep_tool": false
+   }
+  },
+  {
+   "id": "ad64deaf",
+   "type": "fillet",
+   "name": "EdgeRound",
+   "suppressed": false,
+   "params": {
+    "target": "a7478f88",
+    "edges": [
+     {
+      "p": [
+       -40.0,
+       1.7692851563223922e-14,
+       8.0
+      ],
+      "n": [
+       2.499998751682336e-07,
+       0.5000000000000002,
+       0.20000029999969995
+      ]
+     }
+    ],
+    "radius": 2
+   }
+  }
+ ],
+ "rollback": null,
+ "body_meta": {}
+}
