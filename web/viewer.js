@@ -36,6 +36,14 @@ export class Viewer {
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
     key.position.set(1, 1.5, 2);
     camera.add(key);
+    // orthographic twin of the 3D camera (toggle with setProjection)
+    this.perspCam = camera;
+    this.orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1e5, 1e5);
+    this.orthoCam.up.set(0, 0, 1);
+    this.orthoCam.add(key.clone());
+    scene.add(this.orthoCam);
+    this._orthoHalfH = 50;
+    this.projection = 'perspective';
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -109,8 +117,55 @@ export class Viewer {
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
     this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.perspCam.aspect = w / h;
+    this.perspCam.updateProjectionMatrix();
+    this._applyOrthoFrustum();
+  }
+
+  _applyOrthoFrustum() {
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
+    const hh = this._orthoHalfH;
+    Object.assign(this.orthoCam, { left: -hh * w / h, right: hh * w / h, top: hh, bottom: -hh });
+    this.orthoCam.updateProjectionMatrix();
+  }
+
+  /** Camera distance that gives the current view scale (also meaningful for the orthographic camera). */
+  viewDist() {
+    if (this.projection === 'ortho') {
+      return (this._orthoHalfH / this.orthoCam.zoom) / Math.tan((this.perspCam.fov * Math.PI) / 360);
+    }
+    return this.perspCam.position.distanceTo(this.controls.target);
+  }
+
+  /** 'perspective' or 'ortho'; keeps the view direction, target and apparent size. */
+  setProjection(mode) {
+    if (mode === this.projection || !['perspective', 'ortho'].includes(mode)) return;
+    this._viewAnim = null;
+    const t = this.controls.target;
+    const dist = this.viewDist();
+    const dir = this.camera.position.clone().sub(t).normalize();
+    const tanHalf = Math.tan((this.perspCam.fov * Math.PI) / 360);
+    let cam;
+    if (mode === 'ortho') {
+      cam = this.orthoCam;
+      this._orthoHalfH = dist * tanHalf;
+      cam.zoom = 1;
+      this._applyOrthoFrustum();
+    } else {
+      cam = this.perspCam;
+      cam.near = dist / 1000;
+      cam.far = dist * 1000;
+      cam.updateProjectionMatrix();
+    }
+    cam.position.copy(t).addScaledVector(dir, dist);
+    cam.lookAt(t);
+    const sketching = this.activeCamera === this.ortho;
+    this.camera = cam;
+    this.controls.object = cam;
+    if (!sketching) this.activeCamera = cam;
+    this.projection = mode;
+    this.controls.update();
   }
 
   _bindEvents() {
@@ -150,14 +205,14 @@ export class Viewer {
       const rh = this.raycaster.intersectObjects(regions, false)[0];
       if (rh) return { kind: 'profile', sketch: rh.object.userData.sketch, point: rh.object.userData.local(rh.point), world: rh.point.toArray() };
       if (this.pickMode === 'sketch') {
-        this.raycaster.params.Line.threshold = this.camera.position.distanceTo(this.controls.target) * 0.006;
+        this.raycaster.params.Line.threshold = this.viewDist() * 0.006;
         const lines = this.sketchGroup.children.filter((o) => o.isLine && o.visible);
         const lh = this.raycaster.intersectObjects(lines, false)[0];
         if (lh) return { kind: 'profile', sketch: lh.object.userData.sketch, point: null, world: lh.point.toArray() };
       }
       return null;
     }
-    const dist = this.camera.position.distanceTo(this.controls.target);
+    const dist = this.viewDist();
     this.raycaster.params.Line.threshold = dist * 0.006;
     const meshes = [];
     const lines = [];
@@ -325,6 +380,12 @@ export class Viewer {
       const dir = this._sketchNormal.clone().add(new THREE.Vector3(0.35, -0.45, 0.3)).normalize();
       this.controls.target.copy(this._sketchCenter);
       this.camera.position.copy(this._sketchCenter).addScaledVector(dir, this._sketchDist);
+      this.camera.lookAt(this.controls.target);
+      if (this.projection === 'ortho') {
+        this._orthoHalfH = this._sketchDist * Math.tan((this.perspCam.fov * Math.PI) / 360);
+        this.orthoCam.zoom = 1;
+        this._applyOrthoFrustum();
+      }
     }
     this._applyStyle();
   }
@@ -434,7 +495,7 @@ export class Viewer {
   }
 
   markerSize() {
-    return this.camera.position.distanceTo(this.controls.target) * 0.008;
+    return this.viewDist() * 0.008;
   }
 
   nearestEdge(bodyId, p) {
@@ -491,12 +552,18 @@ export class Viewer {
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
-    const dist = radius / Math.sin((this.camera.fov * Math.PI) / 360) * 1.1;
+    const dist = radius / Math.sin((this.perspCam.fov * Math.PI) / 360) * 1.1;
     this.controls.target.copy(center);
     this.camera.position.copy(center).addScaledVector(dir, dist);
-    this.camera.near = dist / 1000;
-    this.camera.far = dist * 1000;
-    this.camera.updateProjectionMatrix();
+    if (this.projection === 'ortho') {
+      this._orthoHalfH = dist * Math.tan((this.perspCam.fov * Math.PI) / 360);
+      this.orthoCam.zoom = 1;
+      this._applyOrthoFrustum();
+    } else {
+      this.camera.near = dist / 1000;
+      this.camera.far = dist * 1000;
+      this.camera.updateProjectionMatrix();
+    }
     const size = Math.max(radius * 2, 10);
     if (Math.abs(niceStep(size / 10) - this.gridStep) > 1e-9) this._buildGrid(size);
   }

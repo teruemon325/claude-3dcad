@@ -656,7 +656,23 @@ document.querySelectorAll('[data-toggle]').forEach((b) => b.addEventListener('cl
   const k = b.dataset.toggle;
   if (k === 'edges') { state.showEdges = !state.showEdges; viewer.setEdgesVisible(state.showEdges); b.classList.toggle('on', state.showEdges); }
   if (k === 'xray') { state.xray = !state.xray; viewer.setXray(state.xray); b.classList.toggle('on', state.xray); }
+  if (k === 'ortho') toggleProjection();
 }));
+
+function setProjection(mode) {
+  viewer.setProjection(mode);
+  const b = document.querySelector('[data-toggle=ortho]');
+  b.classList.toggle('on', mode === 'ortho');
+  b.querySelector('.proj-label').textContent = mode === 'ortho' ? '正投影' : 'パース';
+  status(mode === 'ortho' ? '正投影で表示しています' : 'パース投影で表示しています');
+  try { localStorage.setItem('c3d.projection', mode); } catch { /* storage unavailable */ }
+}
+
+function toggleProjection() {
+  setProjection(viewer.projection === 'ortho' ? 'perspective' : 'ortho');
+}
+
+try { if (localStorage.getItem('c3d.projection') === 'ortho') setProjection('ortho'); } catch { /* storage unavailable */ }
 
 $('#fileOpen').addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -704,6 +720,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape' && state.form) { closeForm(false); }
   else if (e.key === 'Enter' && state.form && !typing) { commitForm(); }
   else if (e.key.toLowerCase() === 'f' && !typing && !mod) { viewer.fit(); }
+  else if (e.key.toLowerCase() === 'o' && !typing && !mod) { toggleProjection(); }
 });
 
 // ------------------------------------------------------------ sketching
